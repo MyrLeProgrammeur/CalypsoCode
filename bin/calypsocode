@@ -261,7 +261,9 @@ startup_check() {
 }
 
 # Invoked from the EXIT, INT and TERM traps, which shellcheck cannot see.
-# shellcheck disable=SC2329
+# Both codes: older shellcheck reports the body as unreachable (SC2317), newer
+# reports the function as uninvoked (SC2329).
+# shellcheck disable=SC2317,SC2329
 receipt_write() {
   local status=$?
   [ "$SESSION_STARTED" = "1" ] || return "$status"
