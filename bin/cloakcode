@@ -78,7 +78,11 @@ if [ "$REQUIRE_VPN" = "1" ]; then
 fi
 
 PROXY_PID=""
-cleanup() { [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true; }
+cleanup() {
+  if [ -n "$PROXY_PID" ]; then
+    kill "$PROXY_PID" 2>/dev/null
+  fi
+}
 trap cleanup EXIT INT TERM
 
 case "$NETWORK_MODE" in
