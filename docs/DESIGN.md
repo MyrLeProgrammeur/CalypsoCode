@@ -1,160 +1,165 @@
-# Design — identity compartmentalization for coding agents
+# Design — erasing who is asking
 
-The direction CalypsoCode is moving toward. This is a design document, not a
-description of what the code currently does. See
-[FINDINGS.md](FINDINGS.md) for what is verified and
+> **Calypso erases who is asking. Not what is asked.**
+
+That sentence is the scope. Everything below follows from it.
+
+This is a design document, not a description of what the code currently does.
+See [FINDINGS.md](FINDINGS.md) for what is verified and
 [ROADMAP.md](ROADMAP.md) for build order.
 
 ---
 
-## The reframe
+## The boundary
 
-The first version treated Tor as the thesis: a wrapper that runs a coding agent
-over Tor with a pool of rotating API keys. Testing killed both halves of that
-(see [F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
-and [F5](FINDINGS.md#f5--litellm-cannot-bind-a-proxy-per-model)), and the
-security argument killed the rotation independently.
+Two different problems get confused constantly:
 
-What survives is a bigger idea. Tor is one **network backend**. The actual
-primitive is:
+| | Problem | Whose job |
+|---|---|---|
+| **What** is sent | Can the provider read my code and my prompts? | **The provider's.** Pick a hardware enclave (Tinfoil) if you want this. It is a property of who you buy from, not of Calypso. |
+| **Who** sent it | Can the provider tell it was me? | **Calypso's.** Nobody serves this well today. |
 
-```
-profile = { API key, network path, model, memory/history boundary }
-```
+Calypso makes no claim about content. It does not read, rewrite, or scrub your
+code or your prompts. If content confidentiality matters to you, that is a
+provider choice, and it is yours to make.
 
-**Identity compartmentalization for coding agents.** The audience is no longer
-"people who want Tor" — it is anyone who does not want project A's agent
-traffic, keys, and context bleeding into project B's: consultants with multiple
-clients, people under NDA boundaries, people whose employer bans AI tooling on
-some repos but not others. Same machinery, much larger audience, and the Tor
-users lose nothing.
+### Why this boundary and not a wider one
+
+An earlier version of this design had Calypso rewriting request bodies to strip
+identifiers out of prompts and tool calls. That was dropped deliberately:
+
+- It required two-way translation with per-session state — the model answers
+  using the fake values, so every answer must be translated back.
+- It had to cover file contents, tool-call arguments, tool-call results, and
+  command output, in every encoding those can appear in.
+- Getting it wrong corrupts the user's source code. For a privacy tool, that is
+  worse than the leak it prevents.
+- Its failures are silent. A missed pattern leaks with no error.
+
+The scope above avoids all of it. Everything Calypso removes, it removes by
+**configuring the environment before launch**, never by rewriting traffic.
 
 ---
 
 ## What "identity" means here
 
-Identity is not your name. To a provider, your identity is the **set of signals
-that let them link two requests to the same person**. You do not need to be
-named to be tracked — you need to be linkable.
+Identity is not your name. To a provider, it is the **set of signals that link
+two requests to the same person**. You do not need to be named to be tracked —
+you need to be linkable.
 
-Compartmentalization means splitting activity into boxes where no signal ever
-crosses between boxes.
+### Every signal, decided
 
-Without compartments, one key and no isolation, over two years:
+| Signal | Who or what? | Calypso |
+|---|---|---|
+| IP address | who | ✅ Tor, via `oniux` |
+| Locale, timezone, hostname | who | ✅ set in the namespace |
+| Git author name and email | who | ✅ per-compartment identity |
+| Agent config / memory files | who — a dossier about you | ✅ per-compartment config |
+| OS / kernel / shell metadata | who | ✅ normalized where the agent allows |
+| Client & TLS fingerprint | who | ⚠️ partial — see below |
+| Working hours, session rhythm | who | ⚠️ reported, not removed |
+| **OS username in file paths** | **who** | ❌ **not handled — user-side, see [THREAT-MODEL](THREAT-MODEL.md)** |
+| **API key / account** | **who** | ❌ **cannot be removed** |
+| Writing style | who, inseparable from what | ❌ cannot be removed |
+| Your code | what | not touched |
+| Your prompt text | what | not touched |
 
-```
-key K + home IP + client-A code + personal projects + your working hours
-→ one profile, everything joined
-```
+The ❌ rows are in scope by the thesis and out of reach in practice. They belong
+in the receipt, stated plainly, every session.
 
-One breach, one subpoena, one bad employee, and all of it is exposed
-retroactively.
-
-With compartments:
-
-```
-box "client-A":  key K_A  circuit C_A  only client A's code
-box "personal":  key K_P  circuit C_P  only personal projects
-→ two accounts that do not look related
-```
-
-### The rule that makes it work
+### The rule for compartments
 
 **Every signal must change at the same boundary.** A compartment is only as
-isolated as its weakest shared signal.
-
-Rotate the key but share the circuit, and the circuit links them. Rotate the
-circuit but share the key, and the key links them.
-
-### The signals a coding agent emits
-
-| Signal | Leaks via |
-|---|---|
-| Network | exit IP, circuit |
-| Credential | API key, account |
-| Payment | card or wallet that funded the account |
-| **Content** | code, file paths, project names, writing style |
-| Temporal | working hours, session rhythm |
-| Client | user-agent, model choice, request shape |
-
-All of them have to be compartmented. Most tools address only the first.
+isolated as its weakest shared signal. Rotate the key but share the circuit and
+the circuit links them; rotate the circuit but share the key and the key links
+them.
 
 ### Why per-request rotation was wrong
 
 The original design shuffled several API keys across requests on a **single
-shared circuit**. That rotates one signal (credential) while holding another
-constant (network), which does not merely fail to help — it actively creates
-the link. The provider observes N distinct keys arriving from one exit IP in
-one time window inside one continuous conversation, which is a correlation
-proof that those accounts are the same person.
+shared circuit**. That rotates the credential while holding the network
+constant, which does not merely fail to help — it creates the link. The provider
+sees N distinct keys arriving from one exit IP, in one window, inside one
+conversation. That is a correlation proof, not a defence.
 
-Rotation as a *goal* is sound: it prevents one account accumulating your entire
-history, so a future compromise cannot expose everything retroactively. The
-unit was wrong. The fix is to rotate at the **compartment** boundary, where
-every signal changes together.
+Rotation as a *goal* is sound — it stops one account accumulating your entire
+history. Only the unit was wrong. Rotation now happens at the **compartment**
+boundary, where every signal changes together.
 
-Within a session, per-request rotation buys nothing anyway — the prompt
-*content* links every request regardless of which key sent it.
+It is also not implementable otherwise:
+[LiteLLM cannot bind a proxy per model](FINDINGS.md#f5--litellm-cannot-bind-a-proxy-per-model).
 
-### The third axis: rotation over time
+### Rotation over time
 
-A compartment's key can retire after N sessions or N days, with a fresh key
-taking over. This bounds accumulation even inside a compartment, and it is
-nearly free: a new namespace already draws a new circuit
+A compartment's key can retire after N sessions or N days, with a fresh one
+taking over. This bounds accumulation inside a compartment, and it is nearly
+free — a new namespace already draws a new circuit
 ([F3](FINDINGS.md#f3--distinct-socks-credentials-give-distinct-circuits)).
 
 ---
 
-## The leak that actually matters
+## The residual: your account
 
-Network isolation is the part everyone thinks of and the part that is already
-solved. The unsolved leak is **content**.
+Tor hides your IP. Your API key then announces your name on arrival.
 
-A coding agent sends file paths constantly. It sends diffs, which carry git
-authorship. It sends stack traces with absolute paths. So the provider
-receives, inside the prompt body:
+You authenticate as a paying customer with an email and a payment method. The
+provider does not need your IP — you told them who you are in the header. Under
+this thesis that stops being a footnote and becomes *the* limit, because "who
+is asking" is the entire product.
 
-```
-/home/<user>/dev/client-acme/src/billing.ts
-Author: <Real Name> <real.email@example.com>
-```
+What can be done:
 
-**Tor does nothing about this.** Neither does a VPN, key rotation, or a TEE.
-Kernel-level network isolation is in place and the username walks out in the
-payload on request one.
+- **Compartments** — separate accounts for separate work, limiting what any one
+  account accumulates.
+- **Retirement** — a compartment's key expires and is replaced.
+- **Funding** — an anonymous purchase chain, with the caveats in
+  [THREAT-MODEL.md](THREAT-MODEL.md).
 
-This is the gap, and it is why a coding-agent-specific privacy tool is a
-different product from "use Tor". The agent controls what gets sent, so the
-agent can scrub it:
+What cannot: making the account itself anonymous. That needs blind signatures
+and a service operator, which is
+[out of scope](#scope-boundary).
 
-- home and project paths → stable per-compartment placeholders (`/work/...`)
-- git author name and email → stripped
-- client and project names → consistent per-compartment pseudonyms, so the
-  model still reasons coherently across a session
-- machine hostname, OS username, absolute paths in traces
+So the honest form of the thesis:
 
-This is also where a local proxy layer earns its place — **not** for key
-rotation, but as an **egress filter** rewriting payloads before they leave.
+> Calypso erases everything about who is asking, except the account you pay
+> with — and gives you the tools to keep those accounts separate.
 
 ---
 
-## Profile schema (sketch)
+## How it works: configure, don't rewrite
+
+Everything Calypso removes is removed **before the agent starts**, by
+controlling the environment it runs in. No traffic is inspected or modified.
+
+```
+LC_ALL=C                  # no locale leak (French shell errors, etc.)
+TZ=UTC                    # no timezone inference
+hostname                  # set inside the namespace
+GIT_AUTHOR_NAME=dev       # git stops printing your name
+GIT_AUTHOR_EMAIL=dev@localhost
+GIT_COMMITTER_NAME=dev
+GIT_COMMITTER_EMAIL=dev@localhost
+XDG_CONFIG_HOME=<compartment>   # agent loads this compartment's config only
+```
+
+Each line removes a signal at its source, so the bad value is never produced.
+That is strictly more reliable than detecting and removing it afterwards, and it
+cannot corrupt anything.
+
+### Profile schema (sketch)
 
 ```yaml
 profile: client-acme
   network: tor          # tor | vpn | direct | socks
-  key:     venice_acme  # one key, bound to this compartment only
+  key:     venice_acme  # bound to this compartment only
   model:   uncensored
-  scrub:   strict       # off | basic | strict
-  retire:  30d          # rotate this compartment's key after N days
+  retire:  30d
 ```
 
-One launch = one namespace = one circuit = one key = one context. Nothing
+One launch = one namespace = one circuit = one key = one config. Nothing
 crosses.
 
 ### Network backends
-
-The launcher builds the namespace to match the `network` field:
 
 | Value | Mechanism |
 |---|---|
@@ -163,75 +168,91 @@ The launcher builds the namespace to match the `network` field:
 | `direct` | plain namespace, no isolation |
 | `socks` | user-supplied SOCKS endpoint |
 
-The compartment machinery, key binding, scrubbing, and receipts are identical
-across backends. Two reasons this matters beyond flexibility:
+Tor is one backend, not the thesis. Two reasons that matters:
 
-- **Most of the audience does not need Tor.** A consultant separating client A
-  from client B needs separate keys and contexts; Tor's three-hop latency buys
-  them nothing. Today they cannot be served at all.
-- **The fail-closed property generalizes.** Namespace isolation makes a VPN
-  leak-proof too, which is better than most VPN kill switches (userspace and
-  racy).
+- **The transport is not the identity model.** Compartments, identity
+  environment, and receipts are unchanged by whichever backend carries them.
+  Changing `network:` moves rows in the signal table above; it does not move the
+  boundary.
+- **Fail-closed generalizes.** Namespace isolation makes a VPN leak-proof too,
+  which is better than most VPN kill switches. Someone who needs a network
+  observer defeated but cannot pay three-hop latency still has a real option.
 
-It also de-risks the project: if the latency test
+It also de-risks the project: if the latency gate
 ([ROADMAP.md](ROADMAP.md#gate)) shows Tor is unusable for agentic sessions,
-`network: tor` becomes a niche profile and everything else survives unchanged.
+`network: tor` becomes a niche profile and nothing else changes.
 
 ### Is LiteLLM required?
 
 **No.** Its only job was per-request key rotation, which it cannot do per
-circuit ([F5](FINDINGS.md#f5--litellm-cannot-bind-a-proxy-per-model)) and which
-is the wrong unit anyway. OpenCode speaks to OpenAI-compatible providers
-directly, so pointing it at Venice removes the proxy layer, a large Python
-dependency with its own CVE history, the loopback hop, and the `ALL_PROXY`
-trap.
+circuit and which is the wrong unit anyway. OpenCode speaks to
+OpenAI-compatible providers directly, so pointing it at a provider removes the
+proxy layer, a large Python dependency with its own CVE history, the loopback
+hop, and the [`ALL_PROXY` trap](FINDINGS.md#f2--oniux-injects-all_proxy-which-breaks-same-namespace-loopback).
 
-Bring a proxy layer back only for: cross-provider fallback, a single model alias
-spanning providers, or — the good reason — **content scrubbing**. Those are
-features, not security primitives, and they should not sit in the trust path by
-default.
+With content rewriting out of scope, nothing requires Calypso to sit in the
+request path at all. Keep a proxy only for cross-provider fallback or model
+aliasing — conveniences, never anonymity.
 
 ---
 
 ## Proof, not claims
 
-Every privacy tool asserts. Almost none demonstrate. The current `doctor`
-checks that three binaries exist and prints `everything is ready` — it has
-never verified a single property.
+Privacy tools assert; almost none demonstrate. A `doctor` that checks three
+binaries exist and prints `everything is ready` has verified nothing.
 
-Five properties it could actually prove, in rough order of difficulty:
+Properties worth proving:
 
 1. **Egress proof.** From inside the namespace, confirm the exit is Tor and
    record which exit. Already demonstrated in
    [F4](FINDINGS.md#f4--venice-and-tinfoil-do-not-block-tor-exits).
 2. **Negative leak test.** Deliberately attempt what *must* fail — reach a host
-   interface, resolve DNS outside the namespace — and assert it fails. Nobody
-   does negative testing, and it is the only way to prove isolation rather than
-   assume it.
-3. **Compartment integrity.** Log the key↔circuit binding per session and
-   assert key_A never left via circuit_B. This is the invariant the whole
-   design rests on, and it is machine-checkable.
-4. **Content scan.** Before each request, scan the payload for known identity
-   tokens — OS username, git email, home path, client names. Block or warn.
-   Milliseconds, and it covers the leak that matters most.
-5. **TEE attestation.** Tinfoil publishes enclave attestation. Verify it per
-   session and surface the result instead of trusting the marketing.
+   interface, resolve DNS outside the namespace — and assert it fails. This is
+   the only way to prove isolation rather than assume it.
+3. **Identity check at startup.** Once, before anything is sent: is the git
+   identity the compartment's or the user's real one? Does the project path
+   contain the OS username? Report and let the user decide.
+4. **Compartment integrity.** Log the key↔circuit binding per session and
+   assert key_A never left via circuit_B.
 
-Package the output as a **session receipt**: on exit, state exactly what left
-the machine, under which identity, through which exit, with which scrubs
-applied and which attestation verified.
+### The receipt
 
-That receipt is the trust artifact — the thing that makes someone recommend
-this to a colleague whose safety depends on it, and the standard
-[THREAT-MODEL.md](THREAT-MODEL.md) already sets.
+On exit, state what left the machine and under what identity — including what
+was **not** removed:
+
+```
+compartment:  client-acme
+network:      tor, exit 94.16.116.81, verified IsTor
+identity:     git dev@localhost, TZ=UTC, LC_ALL=C
+config:       compartment-local only
+
+NOT removed:  prompt content, source code, writing style
+              session timing (14:02–15:31 CET, 47 requests)
+              OS username present in file paths
+              account: venice_acme — the provider knows this customer
+```
+
+The receipt is where the honesty lives. Because it states the limits every
+session, the README does not need a paragraph of disclaimers — the tool says it
+at the moment it matters.
+
+A check at **session start** is different from the receipt and both are needed:
+a log tells you after it left, a warning tells you before. One check at the
+boundary, then silence, then the receipt.
 
 ---
 
 ## Scope boundary
 
-**Do not rebuild the agent.** The agentic loop, tool use, file editing, and
-context management are years of work and are why OpenCode exists. The
-differentiation here is the privacy layer. Wrap or fork an existing agent.
-
-**No hosted or pooled multi-user service.** Ruled out on provider-ToS grounds
-and unchanged by any of the above.
+- **No content rewriting.** Not prompts, not code, not tool calls. See
+  [why](#why-this-boundary-and-not-a-wider-one).
+- **No filesystem mounts or path remapping.** Considered and dropped: it solved
+  only the username-in-path leak, at the cost of per-compartment mount scoping,
+  dependency-reach problems, relative-path depth constraints, and the risk of
+  breaking a user's project. The leak it addressed is handled by user-side
+  convention instead ([THREAT-MODEL.md](THREAT-MODEL.md)).
+- **Do not rebuild the agent.** The agentic loop, tool use, and context
+  management are years of work and are why OpenCode exists. Wrap or fork one.
+- **No hosted or pooled multi-user service.** Ruled out on provider-ToS grounds.
+- **No verifying other people's guarantees.** Calypso does not attest enclaves
+  or vouch for provider policy. Provider choice is the user's.

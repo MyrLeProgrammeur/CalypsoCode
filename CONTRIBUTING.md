@@ -63,6 +63,13 @@ proves properties instead of asserting them) is
 
 Explicitly **out of scope** (see [docs/ROADMAP.md](docs/ROADMAP.md#decisions-taken)):
 
+- **Content rewriting of any kind** — prompts, code, or tool calls. Calypso
+  erases who is asking, not what is asked. Two-way translation with per-session
+  state fails silently and can corrupt a user's source.
+- **Filesystem mounts and path remapping.** Considered and dropped; the leak it
+  addressed is handled by user-side convention.
+- **Verifying other providers' guarantees** (enclave attestation, no-logging
+  policy). Provider choice belongs to the user.
 - Any hosted or pooled service shared between multiple users — ruled out on
   provider-ToS grounds.
 - Rebuilding the coding agent itself. Wrap or fork OpenCode; the
