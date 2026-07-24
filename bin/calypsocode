@@ -8,13 +8,18 @@
 # Design: docs/DESIGN.md · Verified stack behaviour: docs/FINDINGS.md
 set -euo pipefail
 
-PROFILE_DIR="${CALYPSO_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode/profiles}"
+# Resolved before anything is exported: XDG_CONFIG_HOME is rewritten later to
+# point the agent at the compartment, and these paths must not follow it.
+CALYPSO_HOME="${CALYPSO_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode}"
+PROFILE_DIR="${CALYPSO_PROFILE_DIR:-$CALYPSO_HOME/profiles}"
 
 # Keys accepted in a profile file. Anything else is a typo and is refused.
 PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
 PROFILE_REQUIRED=(NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
 
 PROFILE_FILE=""
+COMPARTMENT_DIR=""
+OPENCODE_CONFIG_FILE=""
 
 die() { echo "calypsocode: $*" >&2; exit 1; }
 
@@ -35,6 +40,10 @@ options:
 commands:
   profile          print the resolved profile and exit
   doctor           report what is and is not ready, without launching
+
+environment:
+  CALYPSO_NETWORK  override the profile's NETWORK for one run. `none` disables
+                   isolation entirely and is warned about on every launch.
 
 Every profile is one namespace, one circuit, one key, one config. Nothing
 crosses between compartments — see docs/DESIGN.md.
@@ -122,6 +131,51 @@ profile_show() {
   else
     echo "api key:      \$$P_API_KEY_ENV is NOT set in this shell"
   fi
+}
+
+# --- compartment -----------------------------------------------------------
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
+# The agent config Calypso derives from the profile. Regenerated on every
+# launch, because it must always match the profile it claims to implement.
+# Anything the user wants to add for this compartment goes in
+# $COMPARTMENT_DIR/opencode/opencode.json, which is never written here.
+compartment_prepare() {
+  COMPARTMENT_DIR="$CALYPSO_HOME/compartments/$P_PROFILE"
+  OPENCODE_CONFIG_FILE="$COMPARTMENT_DIR/opencode.calypso.json"
+
+  mkdir -p "$COMPARTMENT_DIR/opencode"
+
+  local base model key_env
+  base="$(json_escape "$P_API_BASE")"
+  model="$(json_escape "$P_MODEL")"
+  key_env="$(json_escape "$P_API_KEY_ENV")"
+
+  cat > "$OPENCODE_CONFIG_FILE" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "model": "calypsocode/$model",
+  "provider": {
+    "calypsocode": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "$(json_escape "$P_PROFILE") (calypsocode compartment)",
+      "options": {
+        "baseURL": "$base",
+        "apiKey": "{env:$key_env}"
+      },
+      "models": {
+        "$model": {}
+      }
+    }
+  }
+}
+EOF
 }
 
 # --- doctor ----------------------------------------------------------------
@@ -233,5 +287,65 @@ case "$COMMAND" in
     ;;
 esac
 
-die "launching is not implemented yet — see docs/ROADMAP.md#build-order.
-  'calypsocode profile' resolves and prints a compartment."
+# --- launch ----------------------------------------------------------------
+
+NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
+case "$NETWORK" in
+  tor | none) ;;
+  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
+esac
+
+API_KEY_VALUE="${!P_API_KEY_ENV:-}"
+if [ -z "$API_KEY_VALUE" ]; then
+  die "\$$P_API_KEY_ENV is empty or unset — this compartment has no key.
+  Export it from wherever you keep secrets, then run again."
+fi
+
+compartment_prepare
+
+# Identity. Every line removes a signal at its source, before the agent starts.
+# Nothing below inspects or modifies traffic. See docs/DESIGN.md#every-signal-decided.
+export LC_ALL=C
+export LANG=C
+export TZ=UTC
+export GIT_AUTHOR_NAME="$P_GIT_NAME"
+export GIT_AUTHOR_EMAIL="$P_GIT_EMAIL"
+export GIT_COMMITTER_NAME="$P_GIT_NAME"
+export GIT_COMMITTER_EMAIL="$P_GIT_EMAIL"
+export XDG_CONFIG_HOME="$COMPARTMENT_DIR"
+export OPENCODE_CONFIG="$OPENCODE_CONFIG_FILE"
+# The profile names the variable rather than holding the key; exporting it by
+# that name is the point. Not passed as an argument — argv is world-readable.
+# shellcheck disable=SC2163
+export "$P_API_KEY_ENV=$API_KEY_VALUE"
+
+# Everything runs inside ONE oniux invocation. The host cannot reach into the
+# namespace — no --publish, no port forwarding, nothing (docs/FINDINGS.md F1).
+# Any check that has to see the namespace has to run in here.
+INNER=$(cat <<'INNER_EOF'
+set -euo pipefail
+
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "calypsocode: opencode not found — curl -fsSL https://opencode.ai/install | bash" >&2
+  exit 127
+fi
+
+exec opencode "$@"
+INNER_EOF
+)
+
+STATUS=0
+case "$NETWORK" in
+  tor)
+    command -v oniux >/dev/null 2>&1 \
+      || die "oniux not found — cargo install --git https://gitlab.torproject.org/tpo/core/oniux"
+    oniux bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
+    ;;
+  none)
+    echo "calypsocode: WARNING — network 'none'. No isolation: your real IP" >&2
+    echo "calypsocode: reaches $P_API_BASE and the compartment covers identity only." >&2
+    bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
+    ;;
+esac
+
+exit "$STATUS"

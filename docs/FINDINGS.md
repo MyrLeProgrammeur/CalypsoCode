@@ -159,6 +159,28 @@ host. `bin/calypsocode` writes its LiteLLM log to `/tmp/calypsocode-litellm.log`
 and then tells the user to read it on failure — pointing at a file that does
 not exist outside the namespace.
 
+## F7 — `$HOME` is shared with the host; only `/tmp` is private
+
+**Status: confirmed.**
+
+The private mount from [F6](#f6--oniux-uses-a-private-tmp-by-default) covers
+`/tmp` and not `$HOME`. A file written by the wrapped process appears on the
+host immediately:
+
+```
+inside:  echo "written from inside the namespace" > ~/.local/state/calypsocode/probe
+host:    cat ~/.local/state/calypsocode/probe
+         written from inside the namespace
+```
+
+The same run corroborates F6 from the other direction: an executable placed in
+a `/tmp` subdirectory and added to `PATH` was **not found** inside the
+namespace, because that path does not exist there.
+
+**Consequence.** The session receipt is written from inside the namespace to
+`~/.local/state/calypsocode/` and read on the host. No host-side file handle has
+to be passed in, and nothing may be written to `/tmp`.
+
 ---
 
 ## Still untested
@@ -171,3 +193,13 @@ These gate the project and none of them are answered yet.
 3. **Latency of a real agentic session.** Dozens of sequential round trips,
    each crossing three relays. Unmeasured, and the likeliest reason a user
    would not run the tool twice. See [ROADMAP.md](ROADMAP.md#gate).
+4. **Whether the user's global agent config leaks into a compartment.**
+   OpenCode merges its config sources rather than replacing them, and its
+   documentation lists a global `~/.config/opencode/opencode.json` without
+   confirming that `XDG_CONFIG_HOME` moves it. `bin/calypsocode` sets both
+   `XDG_CONFIG_HOME` and `OPENCODE_CONFIG` at the compartment, but if the
+   global file loads anyway, the user's real agent config — instructions,
+   MCP servers, memory — enters every compartment. That is the
+   "dossier about you" row of the signal table, unverified. Measure it in the
+   gate session by running with a marker in the host-side global config and
+   checking whether the agent sees it.
