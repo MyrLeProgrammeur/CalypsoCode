@@ -1,28 +1,42 @@
 #!/usr/bin/env bash
-# cloakcode — runs OpenCode against a LiteLLM proxy with key rotation,
-# that proxy itself being network-isolated (Tor via oniux).
+# calypsocode — LEGACY, DOES NOT WORK. Kept for reference only.
 #
-# Architecture:
+# This script implements the pre-testing architecture:
 #   oniux(litellm proxy) --Tor--> Venice / Tinfoil / other provider
 #   opencode --local loopback--> litellm proxy (127.0.0.1)
 #
-# See docs/THREAT-MODEL.md before treating anything here as "total
-# anonymity" — this script isolates the network, it does not by itself
-# handle account identity, payment, or the content of your prompts.
+# That architecture is NOT IMPLEMENTABLE. oniux places the proxy in its own
+# network namespace, which has its own loopback stack, so a host-side
+# opencode can never reach 127.0.0.1:$PROXY_PORT. In `tor` mode this script
+# always exhausts its health-check loop and dies with "LiteLLM proxy did not
+# start in time". See docs/FINDINGS.md (F1).
+#
+# Two further defects, both verified:
+#   - oniux injects ALL_PROXY=socks5h://localhost:9050, which makes
+#     proxy-aware clients tunnel even loopback through Tor, where it is
+#     refused. Any same-namespace loopback hop needs NO_PROXY=127.0.0.1
+#     (FINDINGS.md F2).
+#   - oniux uses a private /tmp by default, so $LOG_FILE is invisible from
+#     the host — the failure message above points at a file that does not
+#     exist (FINDINGS.md F6).
+#
+# The replacement design is docs/DESIGN.md (profiles and compartments);
+# build order is docs/ROADMAP.md. Do not extend this script — it is to be
+# rewritten, not patched.
 set -euo pipefail
 
-CONFIG_DIR="${CLOAKCODE_CONFIG_DIR:-$HOME/.config/cloakcode}"
-LITELLM_CONFIG="${CLOAKCODE_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
-PROXY_PORT="${CLOAKCODE_PROXY_PORT:-4000}"
-NETWORK_MODE="${CLOAKCODE_NETWORK:-tor}"   # tor | none
-REQUIRE_VPN="${CLOAKCODE_REQUIRE_VPN:-0}"  # 1 = fail if no VPN interface is detected
-LOG_FILE="${CLOAKCODE_LOG_FILE:-/tmp/cloakcode-litellm.log}"
+CONFIG_DIR="${CALYPSO_CONFIG_DIR:-$HOME/.config/calypsocode}"
+LITELLM_CONFIG="${CALYPSO_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
+PROXY_PORT="${CALYPSO_PROXY_PORT:-4000}"
+NETWORK_MODE="${CALYPSO_NETWORK:-tor}"   # tor | none
+REQUIRE_VPN="${CALYPSO_REQUIRE_VPN:-0}"  # 1 = fail if no VPN interface is detected
+LOG_FILE="${CALYPSO_LOG_FILE:-/tmp/calypsocode-litellm.log}"
 
 VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
 
-die() { echo "cloakcode: $*" >&2; exit 1; }
+die() { echo "calypsocode: $*" >&2; exit 1; }
 
-# --- cloakcode doctor / --check -----------------------------------------
+# --- calypsocode doctor / --check -----------------------------------------
 # Checks dependencies without needing API keys or network access.
 doctor_check_bin() {
   local name="$1" hint="$2"
@@ -37,7 +51,7 @@ doctor_check_bin() {
 doctor() {
   local failed=0
 
-  echo "cloakcode doctor — checking dependencies (no API key required)"
+  echo "calypsocode doctor — checking dependencies (no API key required)"
   echo
   doctor_check_bin oniux    "see README > Installation (cargo install --git ... oniux)" || failed=1
   doctor_check_bin litellm  "pip install 'litellm[proxy]'" || failed=1
@@ -54,9 +68,9 @@ doctor() {
 
   echo
   if [ "$failed" = 0 ]; then
-    echo "cloakcode: everything is ready."
+    echo "calypsocode: everything is ready."
   else
-    echo "cloakcode: at least one dependency is missing — fix the ✗ above before running cloakcode." >&2
+    echo "calypsocode: at least one dependency is missing — fix the ✗ above before running calypsocode." >&2
   fi
   return "$failed"
 }
@@ -73,7 +87,7 @@ esac
 
 if [ "$REQUIRE_VPN" = "1" ]; then
   ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -Eq "$VPN_IFACE_PATTERN" \
-    || die "CLOAKCODE_REQUIRE_VPN=1 but no recognized VPN interface is active (pattern: $VPN_IFACE_PATTERN).
+    || die "CALYPSO_REQUIRE_VPN=1 but no recognized VPN interface is active (pattern: $VPN_IFACE_PATTERN).
   Connect your VPN first if you want Tor-over-VPN — oniux then routes on top of the existing default route."
 fi
 
@@ -92,16 +106,16 @@ case "$NETWORK_MODE" in
     PROXY_PID=$!
     ;;
   none)
-    echo "cloakcode: WARNING — 'none' mode, no network isolation active." >&2
+    echo "calypsocode: WARNING — 'none' mode, no network isolation active." >&2
     litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
     PROXY_PID=$!
     ;;
   *)
-    die "invalid CLOAKCODE_NETWORK: '$NETWORK_MODE' (accepted values: tor, none)"
+    die "invalid CALYPSO_NETWORK: '$NETWORK_MODE' (accepted values: tor, none)"
     ;;
 esac
 
-echo "cloakcode: starting proxy (network: $NETWORK_MODE, port $PROXY_PORT)..." >&2
+echo "calypsocode: starting proxy (network: $NETWORK_MODE, port $PROXY_PORT)..." >&2
 for _ in $(seq 1 40); do
   curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 && break
   sleep 0.5
@@ -109,7 +123,7 @@ done
 curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 \
   || die "LiteLLM proxy did not start in time — see $LOG_FILE"
 
-echo "cloakcode: proxy ready on 127.0.0.1:${PROXY_PORT}, launching OpenCode." >&2
+echo "calypsocode: proxy ready on 127.0.0.1:${PROXY_PORT}, launching OpenCode." >&2
 
 command -v opencode >/dev/null 2>&1 || die "opencode not found — see README (installation)."
 exec opencode "$@"

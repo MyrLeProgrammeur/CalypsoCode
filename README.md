@@ -1,94 +1,106 @@
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![CI](https://github.com/MyrLeProgrammeur/cloakcode/actions/workflows/ci.yml/badge.svg)](https://github.com/MyrLeProgrammeur/cloakcode/actions/workflows/ci.yml)
 
-# cloakcode
+# CalypsoCode
 
-OpenCode, isolated under Tor, with key rotation to uncensored models.
+Your coding agent, compartmented — separate keys, separate network paths,
+separate contexts per project, with a receipt proving what left your machine.
 
-Deliberately niche: privacy/security-minded devs who want to decouple their
-coding agent usage from their network identity. Self-hosted, everyone with
-their own keys — no shared account, no intermediary.
+> **Status: redesign in progress. `bin/calypsocode` does not currently run.**
+> The original architecture was proven unimplementable by testing (see
+> [docs/FINDINGS.md](docs/FINDINGS.md) — a host process cannot reach a port
+> bound inside an `oniux` namespace). The replacement design is in
+> [docs/DESIGN.md](docs/DESIGN.md); build order in
+> [docs/ROADMAP.md](docs/ROADMAP.md). Do not treat this repo as a working
+> privacy tool yet.
 
-```bash
-./bin/cloakcode doctor   # checks dependencies, no API key or network needed
-./bin/cloakcode          # runs OpenCode behind the tunnel
+## The idea
+
+Run a coding agent against privacy-focused providers (Venice, Tinfoil —
+censored or uncensored models) in a way that keeps the person writing the code
+as untraceable as the stack allows.
+
+The unit is a **profile**:
+
+```yaml
+profile: client-acme
+  network: tor          # tor | vpn | direct | socks
+  key:     venice_acme  # bound to this compartment only
+  model:   uncensored
+  scrub:   strict
+  retire:  30d
 ```
 
-## How it works
+One launch = one namespace = one circuit = one key = one context. Nothing
+crosses between compartments.
 
-[oniux](https://gitlab.torproject.org/tpo/core/oniux) (official Tor Project
-tool, Linux namespaces) isolates a LiteLLM proxy in its own network space and
-forces all its outbound traffic through Tor — leak-proof even if the proxy is
-misconfigured, unlike a simple `HTTPS_PROXY` that some programs ignore. This
-proxy runs several of your API keys (Venice, Tinfoil) in the same pool:
-`routing_strategy: simple-shuffle` picks a different one on each request,
-limiting the profile persistence on a single account. OpenCode only talks to
-this proxy, over loopback — it's the only piece you use directly.
+This serves more people than a Tor wrapper does. Anyone who does not want
+project A's agent traffic, keys, and context bleeding into project B's —
+consultants with multiple clients, people under NDA boundaries, people whose
+employer bans AI tooling on some repos — wants the same machinery, with
+`network:` set to something other than `tor`.
+
+## Why compartments, not key rotation
+
+Identity is not your name. To a provider it is the set of signals that link two
+requests to the same person: exit IP, API key, payment, **content**, timing,
+client fingerprint.
+
+A compartment is only as isolated as its weakest shared signal, so every signal
+must change at the same boundary. The original design rotated API keys per
+request over one shared Tor circuit — which rotates the credential while
+holding the network constant, and so hands the provider a proof that those
+accounts are the same person. [Full reasoning](docs/DESIGN.md#why-per-request-rotation-was-wrong).
+
+## The leak nobody fixes
+
+A coding agent sends file paths, diffs, and stack traces constantly:
 
 ```
-OpenCode → 127.0.0.1 (LiteLLM, key pool) → oniux (Tor) → Venice / Tinfoil
+/home/<user>/dev/client-acme/src/billing.ts
+Author: <Real Name> <real.email@example.com>
 ```
 
-The Tor circuit is built once at `cloakcode`'s startup, not on every message —
-the cost is at launch, not in the conversation.
+Tor does nothing about that. Neither does a VPN, key rotation, or a TEE. You
+can have kernel-level network isolation and still leak your username in the
+payload on request one. Scrubbing that is the part a coding-agent-specific tool
+can do and a general-purpose proxy cannot.
 
-## Installation
+## Proof, not claims
 
-```bash
-cargo install --git https://gitlab.torproject.org/tpo/core/oniux oniux
-pip install 'litellm[proxy]'
-curl -fsSL https://opencode.ai/install | bash
-```
+Privacy tools assert; almost none demonstrate. The goal is a **session
+receipt**: on exit, state exactly what left the machine, under which identity,
+through which exit, with which scrubs applied and which enclave attestation
+verified. Egress proof and negative leak tests included —
+[details](docs/DESIGN.md#proof-not-claims).
 
-## Configuration
+## What is verified
 
-```bash
-mkdir -p ~/.config/cloakcode
-cp config/litellm.config.example.yaml ~/.config/cloakcode/litellm.config.yaml
-cp config/opencode.json.example ./opencode.json
-```
+Everything in [docs/FINDINGS.md](docs/FINDINGS.md) was measured, not assumed:
 
-Fill in your own keys (Venice, Tinfoil) in `litellm.config.yaml`. OpenCode's
-custom provider format changes fast — verified against
-[opencode.ai/docs](https://opencode.ai/docs) at the time of writing, worth
-rechecking if `opencode.json.example` stops working.
-
-### Tor-over-VPN
-
-Connect your VPN before launching `cloakcode` — oniux routes on top of the
-existing default route, no extra setup needed.
-
-## Environment variables
-
-| Variable | Default | Effect |
-|---|---|---|
-| `CLOAKCODE_NETWORK` | `tor` | `tor` or `none` (no isolation, not recommended) |
-| `CLOAKCODE_REQUIRE_VPN` | `0` | `1` = fail if no VPN interface is active |
-| `CLOAKCODE_PROXY_PORT` | `4000` | Local port of the LiteLLM proxy |
-| `CLOAKCODE_CONFIG_DIR` | `~/.config/cloakcode` | Config directory |
-| `CLOAKCODE_LITELLM_CONFIG` | `$CLOAKCODE_CONFIG_DIR/litellm.config.yaml` | LiteLLM config path |
-| `CLOAKCODE_LOG_FILE` | `/tmp/cloakcode-litellm.log` | Proxy log file |
+- `oniux` isolation is fail-closed at the kernel routing level ✅
+- Venice and Tinfoil do **not** block Tor exits (unauthenticated endpoints) ✅
+- Distinct SOCKS credentials yield distinct circuits ✅
+- `oniux` injects `ALL_PROXY`, which silently breaks same-namespace loopback ⚠️
+- LiteLLM cannot bind a proxy per model ❌
+- Authenticated inference over Tor, and real session latency — **untested**
 
 ## Limits
 
-[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — what this hides (your network
-IP) and what it doesn't (your account, your payment, the content of your
-prompts). Read it before trusting this tool for anything beyond what it
-actually does.
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) states what this hides and what it
+does not. Read it before trusting this tool for anything. A privacy tool that
+oversells its guarantees is worse than useless.
 
-## Why not a hosted service
+## Prior art
 
-A key pool shared across multiple users would anonymize better, but Venice's
-terms (responsible for a third-party product's "End Users") and Tinfoil's (no
-key/account sharing) make that risky. Self-hosting avoids it entirely:
-everyone stays a direct customer of the provider, under their own terms.
+[oniux](https://gitlab.torproject.org/tpo/core/oniux) does the isolation half
+as a one-liner; [LLM-Tor](https://github.com/prince776/LLM-Tor) does the
+identity half properly with blind signatures. Neither addresses
+compartmentalization or content scrubbing for coding agents. See
+[docs/ROADMAP.md](docs/ROADMAP.md#prior-art).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) — no CLA. Ideas under discussion but
-not built: smart fallback between a standard and an uncensored model on
-refusal detection, multi-provider pooling beyond Venice/Tinfoil. Open an
-issue before touching either.
+See [CONTRIBUTING.md](CONTRIBUTING.md) — no CLA.
 
 ## License
 

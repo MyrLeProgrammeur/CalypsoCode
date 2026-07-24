@@ -17,8 +17,8 @@ jobs:
           sudo apt-get install -y shellcheck
           pip install --quiet yamllint
 
-      - name: ShellCheck bin/cloakcode
-        run: shellcheck bin/cloakcode
+      - name: ShellCheck bin/calypsocode
+        run: shellcheck bin/calypsocode
 
       - name: Validate YAML in config/
         run: |

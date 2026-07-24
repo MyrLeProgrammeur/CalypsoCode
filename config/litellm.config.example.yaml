@@ -1,34 +1,51 @@
-# Copy to ~/.config/cloakcode/litellm.config.yaml then fill in your own
-# API keys (each on YOUR account — no key shared between several people,
-# see docs/THREAT-MODEL.md for why).
+# LEGACY EXAMPLE — matches bin/calypsocode, which does not work.
+# Kept for reference. See docs/FINDINGS.md and docs/DESIGN.md.
 #
-# Rotation mechanism: several entries with the same model_name form a pool.
-# LiteLLM picks a different one on each request depending on routing_strategy.
-# Reference: https://docs.litellm.ai/docs/proxy/load_balancing
+# Two things in this file are known-wrong:
+#
+# 1. The rotation pool below (several entries sharing model_name +
+#    routing_strategy: simple-shuffle) is DEPRECATED BY DESIGN. Shuffling keys
+#    per request over one shared Tor circuit emits N credentials from a single
+#    exit IP in one time window, which proves to the provider that those
+#    accounts are the same person. Rotation now happens at the compartment
+#    boundary instead — one key, one circuit, one context per launch.
+#    See docs/DESIGN.md#why-per-request-rotation-was-wrong.
+#
+#    LiteLLM cannot fix this: per-model outbound proxy is an open, unimplemented
+#    feature request (BerriAI/litellm#25563), so key->circuit binding inside one
+#    LiteLLM instance is impossible today. See docs/FINDINGS.md (F5).
+#
+# 2. The Tinfoil block's api_base (http://127.0.0.1:3301/v1) DOES NOT WORK as
+#    written. oniux injects ALL_PROXY=socks5h://localhost:9050, so LiteLLM
+#    tunnels even loopback through Tor, which refuses to proxy to localhost.
+#    Any same-namespace loopback hop needs NO_PROXY=127.0.0.1,localhost set.
+#    See docs/FINDINGS.md (F2).
+#
+# Note also that LiteLLM is OPTIONAL in the new design — OpenCode speaks to
+# OpenAI-compatible providers directly. Keep a proxy layer only for
+# cross-provider fallback, model aliasing, or content scrubbing; never for
+# anonymity. See docs/DESIGN.md#is-litellm-required.
+#
+# Copy to ~/.config/calypsocode/litellm.config.yaml then fill in your own API
+# keys (each on YOUR account — no key shared between several people, see
+# docs/THREAT-MODEL.md for why).
 
 model_list:
   # --- Venice AI (api.venice.ai) — direct remote API, OpenAI-compatible ---
+  # Verified reachable over Tor (HTTP 200 on /models, 2 of 3 circuits;
+  # the third circuit was dead, not blocked). See docs/FINDINGS.md (F4).
+  # NOTE: that test was UNAUTHENTICATED. Authenticated inference over Tor is
+  # still untested.
   - model_name: uncensored
     litellm_params:
       model: openai/zai-org-glm-5-1        # see https://docs.venice.ai/models for the current list
       api_base: https://api.venice.ai/api/v1
       api_key: os.environ/VENICE_API_KEY_1
-  - model_name: uncensored
-    litellm_params:
-      model: openai/zai-org-glm-5-1
-      api_base: https://api.venice.ai/api/v1
-      api_key: os.environ/VENICE_API_KEY_2
-  - model_name: uncensored
-    litellm_params:
-      model: openai/zai-org-glm-5-1
-      api_base: https://api.venice.ai/api/v1
-      api_key: os.environ/VENICE_API_KEY_3
 
   # --- Tinfoil (tinfoil.sh) — requires THEIR local attestation proxy ---
   # Tinfoil verifies enclave attestation through a local proxy (tinfoil-cli)
-  # before relaying anything. For that traffic to also go through Tor,
-  # start this proxy INSIDE the same oniux session as this one, before
-  # `cloakcode`:
+  # before relaying anything. That proxy must run INSIDE the same oniux
+  # namespace, and the client must have NO_PROXY set (see header note 2).
   #   oniux tinfoil-cli proxy --port 3301 &
   # then uncomment:
   # - model_name: uncensored
@@ -37,5 +54,6 @@ model_list:
   #     api_base: http://127.0.0.1:3301/v1
   #     api_key: os.environ/TINFOIL_API_KEY
 
-router_settings:
-  routing_strategy: simple-shuffle   # one key from the pool picked at random per request
+# router_settings intentionally omitted: with one key per compartment there is
+# no pool to shuffle. Re-adding simple-shuffle reintroduces the correlation
+# problem described in the header.
