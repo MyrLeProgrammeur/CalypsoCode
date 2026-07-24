@@ -13,37 +13,46 @@ compartment profile, sets identity by environment, launches the agent inside a
 single `oniux` namespace, verifies from inside that the egress is Tor before
 anything is sent, and writes a receipt to `~/.local/state/calypsocode/`.
 
-Steps 1–4 of the build order below are implemented. LiteLLM, the host-side
-health-check loop, and the loopback hop are gone rather than patched — they
-were the v0 defect that
+LiteLLM, the host-side health-check loop, and the loopback hop are gone rather
+than patched — they were the v0 defect that
 [F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
 proved unimplementable.
 
-**What is not done is the gate.** No real coding session has ever run through
-this. Everything below the network layer is still assumption.
+Steps 1–4 are implemented and **the gate below has been run and passed**: a
+real coding session completed through the launcher over Tor, in 35s across 8
+round trips ([F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)).
+
+What remains is step 5, and the things one session cannot establish — how a
+provider responds to Tor-origin traffic over weeks, and how the latency feels
+on a large repository rather than a toy task.
 
 ## <a name="gate"></a>The gate
 
-One test decides whether Tor stays the default or becomes one backend among
-several:
+**Passed. Tor stays the default.**
 
-> Install `opencode`, obtain a Venice key, and run **one real coding session
-> end-to-end** under the compartment design, timing the round trips.
+The test was: install `opencode`, obtain a Venice key, and run one real coding
+session end-to-end under the compartment design, timing the round trips. It was
+run, and [F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)
+records the numbers.
 
-It answers both remaining premise risks at once:
+Both premise risks are answered:
 
-1. Does authenticated `POST /chat/completions` survive over Tor, or do providers
-   treat billable traffic differently from the public `/models` endpoint that
-   [F4](FINDINGS.md#f4--venice-and-tinfoil-do-not-block-tor-exits) tested?
-2. Is an agentic session — dozens of sequential round trips, each crossing three
-   relays, with roughly 1 in 3 circuits dead in early sampling — usable at all?
+1. **Does authenticated `POST /chat/completions` survive over Tor?** Yes. HTTP
+   200 in 3.0s, billed normally. Venice does not treat billable Tor traffic
+   differently from the public `/models` endpoint that
+   [F4](FINDINGS.md#f4--venice-and-tinfoil-do-not-block-tor-exits) tested.
+2. **Is an agentic session usable at Tor latency?** Yes, for a small task:
+   8 round trips, 3.8s mean, 35s wall clock, 0 failures, correct result.
 
-Security correctness is irrelevant if the answer to (2) is no, because nobody
-runs an unusable tool twice. **Measure before building further.**
+What the gate did *not* license: F8 is one task on one provider on one day.
+It shows the premise holds, not that a long session on a large repository is
+comfortable, and it says nothing about how a provider's fraud heuristics
+respond over weeks. Those are in
+[still untested](FINDINGS.md#still-untested).
 
-The [network-backend design](DESIGN.md#network-backends) makes a bad result
-survivable rather than fatal: `network: tor` becomes a niche profile and the
-rest of the architecture is unaffected.
+The [network-backend design](DESIGN.md#network-backends) was the hedge against
+a bad result here. It is no longer load-bearing for that reason, and the other
+backends can be judged on their own merits.
 
 ## Build order
 

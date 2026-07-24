@@ -168,7 +168,7 @@ compartment_prepare() {
   COMPARTMENT_DIR="$CALYPSO_HOME/compartments/$P_PROFILE"
   OPENCODE_CONFIG_FILE="$COMPARTMENT_DIR/opencode.calypso.json"
 
-  mkdir -p "$COMPARTMENT_DIR/opencode"
+  mkdir -p "$COMPARTMENT_DIR/opencode" "$COMPARTMENT_DIR/data" "$COMPARTMENT_DIR/state"
 
   local base model key_env
   base="$(json_escape "$P_API_BASE")"
@@ -477,6 +477,12 @@ export GIT_COMMITTER_NAME="$P_GIT_NAME"
 export GIT_COMMITTER_EMAIL="$P_GIT_EMAIL"
 export XDG_CONFIG_HOME="$COMPARTMENT_DIR"
 export OPENCODE_CONFIG="$OPENCODE_CONFIG_FILE"
+# Config alone is not the compartment. Measured: with only XDG_CONFIG_HOME set,
+# OpenCode still resolved data and state to the shared ~/.local/share/opencode
+# and ~/.local/state/opencode — session history and stored credentials would
+# cross between compartments. Every signal has to move at the same boundary.
+export XDG_DATA_HOME="$COMPARTMENT_DIR/data"
+export XDG_STATE_HOME="$COMPARTMENT_DIR/state"
 # The profile names the variable rather than holding the key; exporting it by
 # that name is the point. Not passed as an argument — argv is world-readable.
 # shellcheck disable=SC2163

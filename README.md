@@ -6,13 +6,13 @@ CalypsoCode removes a defined set of identifiers — network address, git
 identity, environment metadata, agent config — from what your coding agent
 transmits, and reports per session what it removed and what it did not.
 
-> **Status: the launcher runs. The premise is not yet measured.** It loads a
-> compartment, launches the agent inside one `oniux` namespace, verifies from
-> inside that the egress really is Tor before anything is sent, and writes a
-> receipt. What has never happened is a real coding session against a real
-> provider: whether authenticated inference survives Tor, and whether the
-> latency is usable at all, are both open ([the gate](docs/ROADMAP.md#gate)).
-> Until that is answered, don't rely on this for anything that matters.
+> **Status: it works, and the premise has been measured once.** A real coding
+> session ran end-to-end through the launcher over Tor — 8 round trips, 3.8s
+> mean, 0 failures ([the gate](docs/ROADMAP.md#gate)). That is an existence
+> proof, not a track record: one task, one provider, one day. What a single
+> session cannot show — how a provider reacts to Tor-origin traffic over weeks,
+> how the latency feels on a large repository — is listed in
+> [docs/FINDINGS.md](docs/FINDINGS.md#still-untested).
 
 ## The idea
 
@@ -87,11 +87,16 @@ prompt content, and your session timing.
 Everything in [docs/FINDINGS.md](docs/FINDINGS.md) was measured, not assumed:
 
 - `oniux` isolation is fail-closed at the kernel routing level ✅
-- Venice and Tinfoil do **not** block Tor exits (unauthenticated endpoints) ✅
+- Venice and Tinfoil do **not** block Tor exits ✅
+- Authenticated, billed inference over Tor works — HTTP 200 in 3.0s ✅
+- A real coding session ran end-to-end: 8 round trips, 3.8s mean, 0 failures ✅
 - Distinct SOCKS credentials yield distinct circuits ✅
 - `oniux` injects `ALL_PROXY`, which silently breaks same-namespace loopback ⚠️
+- `XDG_CONFIG_HOME` alone does **not** compartment an agent — data and state
+  move separately, and did not until this was measured ⚠️
 - LiteLLM cannot bind a proxy per model ❌
-- Authenticated inference over Tor, and real session latency — **untested**
+- Provider response to Tor traffic **over weeks**, and latency on a large
+  repository — **untested**
 
 ## Limits
 
