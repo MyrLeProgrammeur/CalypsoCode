@@ -22,6 +22,52 @@ VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
 
 die() { echo "cloakcode: $*" >&2; exit 1; }
 
+# --- cloakcode doctor / --check -----------------------------------------
+# Vérifie les dépendances sans avoir besoin de clés API ni de réseau.
+doctor_check_bin() {
+  local name="$1" hint="$2"
+  if command -v "$name" >/dev/null 2>&1; then
+    echo "  ✓ $name  ($(command -v "$name"))"
+    return 0
+  fi
+  echo "  ✗ $name introuvable — $hint"
+  return 1
+}
+
+doctor() {
+  local failed=0
+
+  echo "cloakcode doctor — vérification des dépendances (aucune clé API requise)"
+  echo
+  doctor_check_bin oniux    "voir README > Installation (cargo install --git ... oniux)" || failed=1
+  doctor_check_bin litellm  "pip install 'litellm[proxy]'" || failed=1
+  doctor_check_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
+
+  echo
+  if [ -f "$LITELLM_CONFIG" ]; then
+    echo "  ✓ config LiteLLM trouvée : $LITELLM_CONFIG"
+  else
+    echo "  ✗ config LiteLLM absente : $LITELLM_CONFIG"
+    echo "    → cp config/litellm.config.example.yaml $LITELLM_CONFIG, puis renseigne tes clés."
+    failed=1
+  fi
+
+  echo
+  if [ "$failed" = 0 ]; then
+    echo "cloakcode: tout est prêt."
+  else
+    echo "cloakcode: au moins une dépendance manque — corrige les ✗ ci-dessus avant de lancer cloakcode." >&2
+  fi
+  return "$failed"
+}
+
+case "${1:-}" in
+  doctor|--check)
+    doctor
+    exit $?
+    ;;
+esac
+
 [ -f "$LITELLM_CONFIG" ] || die "config introuvable : $LITELLM_CONFIG
   → copie config/litellm.config.example.yaml vers cet emplacement et renseigne tes clés."
 

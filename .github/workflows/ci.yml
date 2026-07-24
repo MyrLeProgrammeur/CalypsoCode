@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install linters
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          pip install --quiet yamllint
+
+      - name: ShellCheck bin/cloakcode
+        run: shellcheck bin/cloakcode
+
+      - name: Validate YAML in config/
+        run: |
+          yamllint -d "{extends: default, rules: {line-length: disable, document-start: disable, comments-indentation: disable}}" config/*.yaml
+
+      - name: Validate JSON in config/
+        run: |
+          shopt -s nullglob
+          files=(config/*.json config/*.json.example)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "Aucun fichier JSON trouvé dans config/"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Checking $f"
+            python3 -m json.tool "$f" > /dev/null
+          done
