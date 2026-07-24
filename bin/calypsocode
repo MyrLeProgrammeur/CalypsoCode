@@ -12,6 +12,9 @@ set -euo pipefail
 # point the agent at the compartment, and these paths must not follow it.
 CALYPSO_HOME="${CALYPSO_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode}"
 PROFILE_DIR="${CALYPSO_PROFILE_DIR:-$CALYPSO_HOME/profiles}"
+# Receipts go here and never to /tmp: oniux gives the child a private /tmp, so
+# anything written there is invisible from the host (docs/FINDINGS.md F6/F7).
+STATE_DIR="${CALYPSO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/calypsocode}"
 
 # Keys accepted in a profile file. Anything else is a typo and is refused.
 PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
@@ -39,6 +42,7 @@ options:
   --no-verify      skip the egress check. It costs a few seconds over Tor;
                    skipping it means the session runs with no evidence that
                    its traffic left via Tor, and the receipt says so.
+  -y, --yes        do not wait for confirmation of the startup check
 
 commands:
   profile          print the resolved profile and exit
@@ -181,6 +185,141 @@ compartment_prepare() {
 EOF
 }
 
+# --- startup check and receipt ---------------------------------------------
+# One check at the boundary, then silence, then the receipt. No per-request
+# warnings — see docs/DESIGN.md#the-receipt.
+
+SESSION_STARTED=0
+SESSION_START_EPOCH=0
+SESSION_START_STAMP=""
+EGRESS_FILE=""
+STARTED_FILE=""
+RECEIPT_DONE=0
+
+os_username() { id -un; }
+
+# The path leak Calypso does not fix. Convention handles it; the receipt states
+# it. See docs/THREAT-MODEL.md#keep-your-username-out-of-your-paths.
+path_leaks_username() {
+  local user
+  user="$(os_username)"
+  case "$PWD" in
+    *"$user"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+startup_check() {
+  local user
+  user="$(os_username)"
+
+  echo "calypsocode: compartment '$P_PROFILE'"
+  echo "  git identity   $P_GIT_NAME <$P_GIT_EMAIL>"
+  echo "  account        \$$P_API_KEY_ENV at $P_API_BASE"
+  echo "                 the provider knows which customer this is — it is what you pay with"
+  if [ "$NETWORK" = "tor" ]; then
+    if [ "$VERIFY" = "1" ]; then
+      echo "  network        tor, verified from inside the namespace before launch"
+    else
+      echo "  network        tor, NOT verified (--no-verify)"
+    fi
+  else
+    echo "  network        none — no isolation, your real IP reaches the provider"
+  fi
+  if path_leaks_username; then
+    echo "  project path   $PWD"
+    echo "                 contains your OS username '$user' — the agent will read and send it"
+  else
+    echo "  project path   $PWD — no OS username in it"
+  fi
+
+  if [ "$ASSUME_YES" = "1" ]; then
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    die "not a terminal, so the check above cannot be confirmed — pass --yes to proceed."
+  fi
+
+  local answer=""
+  printf 'Launch this compartment? [y/N] '
+  read -r answer || true
+  case "$answer" in
+    y | Y | yes | YES) return 0 ;;
+    *) die "aborted." ;;
+  esac
+}
+
+receipt_write() {
+  local status=$?
+  [ "$SESSION_STARTED" = "1" ] || return "$status"
+  # Ctrl-C runs this from the signal trap and then again from the EXIT trap.
+  if [ "$RECEIPT_DONE" = "1" ]; then return "$status"; fi
+  RECEIPT_DONE=1
+
+  local end_epoch end_stamp elapsed exit_ip user receipt started=0
+
+  exit_ip=""
+  if [ -n "$EGRESS_FILE" ] && [ -f "$EGRESS_FILE" ]; then
+    read -r exit_ip < "$EGRESS_FILE" || true
+    rm -f "$EGRESS_FILE"
+  fi
+  if [ -n "$STARTED_FILE" ] && [ -f "$STARTED_FILE" ]; then
+    started=1
+    rm -f "$STARTED_FILE"
+  fi
+
+  # A refused launch is not a session. Saying what "was not removed" when
+  # nothing was sent would be a receipt for something that never happened.
+  if [ "$started" != "1" ]; then
+    echo "calypsocode: the agent never started — nothing was sent, so no receipt." >&2
+    return "$status"
+  fi
+
+  end_epoch="$(date -u +%s)"
+  end_stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  elapsed=$((end_epoch - SESSION_START_EPOCH))
+  user="$(os_username)"
+
+  mkdir -p "$STATE_DIR"
+  receipt="$STATE_DIR/receipt-$(date -u +%Y%m%dT%H%M%SZ)-$P_PROFILE.txt"
+
+  {
+    echo "calypsocode receipt"
+    echo
+    echo "compartment:  $P_PROFILE"
+    if [ "$NETWORK" = "none" ]; then
+      echo "network:      none — no isolation. Your real IP reached $P_API_BASE."
+    elif [ -n "$exit_ip" ]; then
+      echo "network:      tor, exit $exit_ip, verified IsTor before launch"
+    elif [ "$VERIFY" = "1" ]; then
+      echo "network:      tor, but the egress check did not complete — unverified"
+    else
+      echo "network:      tor, egress NOT verified (--no-verify)"
+    fi
+    echo "identity:     git $P_GIT_NAME <$P_GIT_EMAIL>, TZ=UTC, LC_ALL=C"
+    echo "config:       compartment-local only ($COMPARTMENT_DIR)"
+    echo "session:      $SESSION_START_STAMP – $end_stamp (${elapsed}s)"
+    echo
+    echo "NOT removed:  prompt content, source code, writing style"
+    echo "              session timing — the times above are what the provider saw"
+    if path_leaks_username; then
+      echo "              OS username '$user' is in your project path ($PWD)"
+    fi
+    echo "              account: \$$P_API_KEY_ENV at $P_API_BASE — the provider"
+    echo "                       knows which paying customer this was"
+    echo
+    echo "Calypso is not in the request path, so this states session facts, not"
+    echo "contents. It cannot count requests or tell you what was sent — by design:"
+    echo "reading your traffic to report on it is the thing it refuses to do."
+  } > "$receipt"
+
+  cat "$receipt" >&2
+  echo >&2
+  echo "calypsocode: receipt written to $receipt" >&2
+
+  return "$status"
+}
+
 # --- doctor ----------------------------------------------------------------
 # Reports what it checked and what it could not check. It does not conclude
 # that the tool works: three binaries existing proves nothing, and saying
@@ -234,6 +373,7 @@ doctor() {
 PROFILE_NAME="default"
 COMMAND=""
 VERIFY=1
+ASSUME_YES=0
 AGENT_ARGS=()
 
 case "${1:-}" in
@@ -260,6 +400,10 @@ while [ $# -gt 0 ]; do
       ;;
     --no-verify)
       VERIFY=0
+      shift
+      ;;
+    -y | --yes)
+      ASSUME_YES=1
       shift
       ;;
     -h | --help)
@@ -332,6 +476,17 @@ export "$P_API_KEY_ENV=$API_KEY_VALUE"
 if [ "$NETWORK" = "none" ]; then VERIFY=0; fi
 export CALYPSO_VERIFY="$VERIFY"
 
+startup_check
+
+# The exit IP is only knowable inside the namespace, and $HOME is the way back
+# out (F7). Not /tmp — that is private to the child (F6).
+mkdir -p "$STATE_DIR"
+EGRESS_FILE="$STATE_DIR/.egress-$$"
+STARTED_FILE="$STATE_DIR/.started-$$"
+rm -f "$EGRESS_FILE" "$STARTED_FILE"
+export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
+export CALYPSO_STARTED_FILE="$STARTED_FILE"
+
 # Everything runs inside ONE oniux invocation. The host cannot reach into the
 # namespace — no --publish, no port forwarding, nothing (docs/FINDINGS.md F1).
 # Any check that has to see the namespace has to run in here.
@@ -380,6 +535,9 @@ if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
   fi
 
   export CALYPSO_EXIT_IP
+  if [ -n "${CALYPSO_EGRESS_FILE:-}" ]; then
+    printf '%s\n' "$CALYPSO_EXIT_IP" > "$CALYPSO_EGRESS_FILE"
+  fi
   echo "calypsocode: egress verified — Tor exit $CALYPSO_EXIT_IP" >&2
 else
   echo "calypsocode: WARNING — egress unverified. Nothing here has checked that" >&2
@@ -391,9 +549,25 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 127
 fi
 
+# Tells the launcher a session actually happened, so it knows whether a
+# receipt is owed.
+if [ -n "${CALYPSO_STARTED_FILE:-}" ]; then
+  : > "$CALYPSO_STARTED_FILE"
+fi
+
 exec opencode "$@"
 INNER_EOF
 )
+
+SESSION_START_EPOCH="$(date -u +%s)"
+SESSION_START_STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SESSION_STARTED=1
+# Ctrl-C is how an agent session normally ends, and bash does not run an EXIT
+# trap for an untrapped SIGINT — so the receipt would be lost exactly when it
+# is most expected. Trap the signals too; RECEIPT_DONE keeps it to one.
+trap receipt_write EXIT
+trap 'receipt_write; exit 130' INT
+trap 'receipt_write; exit 143' TERM
 
 STATUS=0
 case "$NETWORK" in

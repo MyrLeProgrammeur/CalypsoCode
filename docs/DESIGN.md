@@ -239,15 +239,26 @@ was **not** removed:
 
 ```
 compartment:  client-acme
-network:      tor, exit 94.16.116.81, verified IsTor
-identity:     git dev@localhost, TZ=UTC, LC_ALL=C
-config:       compartment-local only
+network:      tor, exit 94.16.116.81, verified IsTor before launch
+identity:     git dev <dev@localhost>, TZ=UTC, LC_ALL=C
+config:       compartment-local only (~/.config/calypsocode/compartments/client-acme)
+session:      2026-07-24T14:02:11Z – 2026-07-24T15:31:44Z (5373s)
 
 NOT removed:  prompt content, source code, writing style
-              session timing (14:02–15:31 CET, 47 requests)
-              OS username present in file paths
-              account: venice_acme — the provider knows this customer
+              session timing — the times above are what the provider saw
+              OS username 'matheo' is in your project path (/home/matheo/dev/acme)
+              account: $VENICE_API_KEY_ACME at api.venice.ai — the provider
+                       knows which paying customer this was
+
+Calypso is not in the request path, so this states session facts, not
+contents. It cannot count requests or tell you what was sent — by design:
+reading your traffic to report on it is the thing it refuses to do.
 ```
+
+The receipt counts no requests, and that is not an omission. Counting them
+would mean sitting in the request path, which is the proxy this design removed.
+A session that never launched — egress unverified, agent missing — produces no
+receipt at all, because nothing was sent.
 
 The receipt is where the honesty lives. Because it states the limits every
 session, the README does not need a paragraph of disclaimers — the tool says it
