@@ -1,129 +1,609 @@
 #!/usr/bin/env bash
-# calypsocode — LEGACY, DOES NOT WORK. Kept for reference only.
+# calypsocode — run a coding agent under a compartment identity.
 #
-# This script implements the pre-testing architecture:
-#   oniux(litellm proxy) --Tor--> Venice / Tinfoil / other provider
-#   opencode --local loopback--> litellm proxy (127.0.0.1)
+# Calypso erases who is asking, not what is asked. Nothing here inspects or
+# modifies traffic: every identifier is removed before the agent starts, by
+# controlling the environment it runs in.
 #
-# That architecture is NOT IMPLEMENTABLE. oniux places the proxy in its own
-# network namespace, which has its own loopback stack, so a host-side
-# opencode can never reach 127.0.0.1:$PROXY_PORT. In `tor` mode this script
-# always exhausts its health-check loop and dies with "LiteLLM proxy did not
-# start in time". See docs/FINDINGS.md (F1).
-#
-# Two further defects, both verified:
-#   - oniux injects ALL_PROXY=socks5h://localhost:9050, which makes
-#     proxy-aware clients tunnel even loopback through Tor, where it is
-#     refused. Any same-namespace loopback hop needs NO_PROXY=127.0.0.1
-#     (FINDINGS.md F2).
-#   - oniux uses a private /tmp by default, so $LOG_FILE is invisible from
-#     the host — the failure message above points at a file that does not
-#     exist (FINDINGS.md F6).
-#
-# The replacement design is docs/DESIGN.md (profiles and compartments);
-# build order is docs/ROADMAP.md. Do not extend this script — it is to be
-# rewritten, not patched.
+# Design: docs/DESIGN.md · Verified stack behaviour: docs/FINDINGS.md
 set -euo pipefail
 
-CONFIG_DIR="${CALYPSO_CONFIG_DIR:-$HOME/.config/calypsocode}"
-LITELLM_CONFIG="${CALYPSO_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
-PROXY_PORT="${CALYPSO_PROXY_PORT:-4000}"
-NETWORK_MODE="${CALYPSO_NETWORK:-tor}"   # tor | none
-REQUIRE_VPN="${CALYPSO_REQUIRE_VPN:-0}"  # 1 = fail if no VPN interface is detected
-LOG_FILE="${CALYPSO_LOG_FILE:-/tmp/calypsocode-litellm.log}"
+# Resolved before anything is exported: XDG_CONFIG_HOME is rewritten later to
+# point the agent at the compartment, and these paths must not follow it.
+CALYPSO_HOME="${CALYPSO_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode}"
+PROFILE_DIR="${CALYPSO_PROFILE_DIR:-$CALYPSO_HOME/profiles}"
+# Receipts go here and never to /tmp: oniux gives the child a private /tmp, so
+# anything written there is invisible from the host (docs/FINDINGS.md F6/F7).
+STATE_DIR="${CALYPSO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/calypsocode}"
 
-VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
+# Keys accepted in a profile file. Anything else is a typo and is refused.
+PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
+PROFILE_REQUIRED=(NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
+
+# Filled by profile_load via `printf -v`, one per key above. Declared here so
+# their origin is visible at the top of the file rather than only inside the
+# parser.
+P_PROFILE=""
+P_NETWORK=""
+P_API_KEY_ENV=""
+P_API_BASE=""
+P_MODEL=""
+P_GIT_NAME=""
+P_GIT_EMAIL=""
+
+PROFILE_FILE=""
+COMPARTMENT_DIR=""
+OPENCODE_CONFIG_FILE=""
 
 die() { echo "calypsocode: $*" >&2; exit 1; }
 
-# --- calypsocode doctor / --check -----------------------------------------
-# Checks dependencies without needing API keys or network access.
-doctor_check_bin() {
-  local name="$1" hint="$2"
-  if command -v "$name" >/dev/null 2>&1; then
-    echo "  ✓ $name  ($(command -v "$name"))"
+usage() {
+  cat <<'EOF'
+calypsocode — run a coding agent under a compartment identity.
+
+usage:
+  calypsocode [--profile NAME] [agent args...]
+  calypsocode profile [--profile NAME]
+  calypsocode doctor
+  calypsocode --help
+
+options:
+  --profile NAME   compartment to launch (default: default). Resolved to
+                   ~/.config/calypsocode/profiles/NAME.env
+  --no-verify      skip the egress check. It costs a few seconds over Tor;
+                   skipping it means the session runs with no evidence that
+                   its traffic left via Tor, and the receipt says so.
+  -y, --yes        do not wait for confirmation of the startup check
+
+commands:
+  profile          print the resolved profile and exit
+  doctor           report what is and is not ready, without launching
+
+environment:
+  CALYPSO_NETWORK  override the profile's NETWORK for one run. `none` disables
+                   isolation entirely and is warned about on every launch.
+
+Every profile is one namespace, one circuit, one key, one config. Nothing
+crosses between compartments — see docs/DESIGN.md.
+EOF
+}
+
+# --- profile loading -------------------------------------------------------
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+profile_key_known() {
+  local k
+  for k in "${PROFILE_KEYS[@]}"; do
+    if [ "$k" = "$1" ]; then return 0; fi
+  done
+  return 1
+}
+
+# Parses KEY=value lines into P_<KEY> shell variables. The file is read, never
+# sourced: a profile lives in a config directory and must not be able to run
+# code.
+profile_load() {
+  local name="$1"
+  PROFILE_FILE="$PROFILE_DIR/$name.env"
+
+  if [ ! -f "$PROFILE_FILE" ]; then
+    die "profile '$name' not found: $PROFILE_FILE
+  → mkdir -p '$PROFILE_DIR' && cp config/profile.example.env '$PROFILE_FILE'
+    then edit it, or select another one with --profile NAME."
+  fi
+
+  local lineno=0 line key value var
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"
+    line="$(trim "$line")"
+    case "$line" in
+      '' | '#'*) continue ;;
+      *=*) ;;
+      *) die "$PROFILE_FILE:$lineno: not a KEY=value line: $line" ;;
+    esac
+
+    key="$(trim "${line%%=*}")"
+    value="$(trim "${line#*=}")"
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}" ;;
+      \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+
+    if ! profile_key_known "$key"; then
+      die "$PROFILE_FILE:$lineno: unknown key '$key' (accepted: ${PROFILE_KEYS[*]})"
+    fi
+    printf -v "P_$key" '%s' "$value"
+  done < "$PROFILE_FILE"
+
+  for key in "${PROFILE_REQUIRED[@]}"; do
+    var="P_$key"
+    if [ -z "${!var:-}" ]; then
+      die "$PROFILE_FILE: missing required key '$key'"
+    fi
+  done
+
+  : "${P_PROFILE:=$name}"
+
+  case "$P_NETWORK" in
+    tor | none) ;;
+    *) die "$PROFILE_FILE: NETWORK='$P_NETWORK' — v1 accepts 'tor' or 'none'" ;;
+  esac
+}
+
+profile_show() {
+  echo "profile:      $P_PROFILE"
+  echo "file:         $PROFILE_FILE"
+  echo "network:      $P_NETWORK"
+  echo "api_base:     $P_API_BASE"
+  echo "model:        $P_MODEL"
+  echo "git identity: $P_GIT_NAME <$P_GIT_EMAIL>"
+  if [ -n "${!P_API_KEY_ENV:-}" ]; then
+    echo "api key:      \$$P_API_KEY_ENV is set"
+  else
+    echo "api key:      \$$P_API_KEY_ENV is NOT set in this shell"
+  fi
+}
+
+# --- compartment -----------------------------------------------------------
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+
+# The agent config Calypso derives from the profile. Regenerated on every
+# launch, because it must always match the profile it claims to implement.
+# Anything the user wants to add for this compartment goes in
+# $COMPARTMENT_DIR/opencode/opencode.json, which is never written here.
+compartment_prepare() {
+  COMPARTMENT_DIR="$CALYPSO_HOME/compartments/$P_PROFILE"
+  OPENCODE_CONFIG_FILE="$COMPARTMENT_DIR/opencode.calypso.json"
+
+  mkdir -p "$COMPARTMENT_DIR/opencode" "$COMPARTMENT_DIR/data" "$COMPARTMENT_DIR/state"
+
+  local base model key_env
+  base="$(json_escape "$P_API_BASE")"
+  model="$(json_escape "$P_MODEL")"
+  key_env="$(json_escape "$P_API_KEY_ENV")"
+
+  cat > "$OPENCODE_CONFIG_FILE" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "model": "calypsocode/$model",
+  "provider": {
+    "calypsocode": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "$(json_escape "$P_PROFILE") (calypsocode compartment)",
+      "options": {
+        "baseURL": "$base",
+        "apiKey": "{env:$key_env}"
+      },
+      "models": {
+        "$model": {}
+      }
+    }
+  }
+}
+EOF
+}
+
+# --- startup check and receipt ---------------------------------------------
+# One check at the boundary, then silence, then the receipt. No per-request
+# warnings — see docs/DESIGN.md#the-receipt.
+
+SESSION_STARTED=0
+SESSION_START_EPOCH=0
+SESSION_START_STAMP=""
+EGRESS_FILE=""
+STARTED_FILE=""
+RECEIPT_DONE=0
+
+os_username() { id -un; }
+
+# The path leak Calypso does not fix. Convention handles it; the receipt states
+# it. See docs/THREAT-MODEL.md#keep-your-username-out-of-your-paths.
+path_leaks_username() {
+  local user
+  user="$(os_username)"
+  case "$PWD" in
+    *"$user"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+startup_check() {
+  local user
+  user="$(os_username)"
+
+  echo "calypsocode: compartment '$P_PROFILE'"
+  echo "  git identity   $P_GIT_NAME <$P_GIT_EMAIL>"
+  echo "  account        \$$P_API_KEY_ENV at $P_API_BASE"
+  echo "                 the provider knows which customer this is — it is what you pay with"
+  if [ "$NETWORK" = "tor" ]; then
+    if [ "$VERIFY" = "1" ]; then
+      echo "  network        tor, verified from inside the namespace before launch"
+    else
+      echo "  network        tor, NOT verified (--no-verify)"
+    fi
+  else
+    echo "  network        none — no isolation, your real IP reaches the provider"
+  fi
+  if path_leaks_username; then
+    echo "  project path   $PWD"
+    echo "                 contains your OS username '$user' — the agent will read and send it"
+  else
+    echo "  project path   $PWD — no OS username in it"
+  fi
+
+  if [ "$ASSUME_YES" = "1" ]; then
     return 0
   fi
-  echo "  ✗ $name not found — $hint"
+  if [ ! -t 0 ]; then
+    die "not a terminal, so the check above cannot be confirmed — pass --yes to proceed."
+  fi
+
+  local answer=""
+  printf 'Launch this compartment? [y/N] '
+  read -r answer || true
+  case "$answer" in
+    y | Y | yes | YES) return 0 ;;
+    *) die "aborted." ;;
+  esac
+}
+
+# Invoked from the EXIT, INT and TERM traps, which shellcheck cannot see.
+# Both codes: older shellcheck reports the body as unreachable (SC2317), newer
+# reports the function as uninvoked (SC2329).
+# shellcheck disable=SC2317,SC2329
+receipt_write() {
+  local status=$?
+  [ "$SESSION_STARTED" = "1" ] || return "$status"
+  # Ctrl-C runs this from the signal trap and then again from the EXIT trap.
+  if [ "$RECEIPT_DONE" = "1" ]; then return "$status"; fi
+  RECEIPT_DONE=1
+
+  local end_epoch end_stamp elapsed exit_ip user receipt started=0
+
+  exit_ip=""
+  if [ -n "$EGRESS_FILE" ] && [ -f "$EGRESS_FILE" ]; then
+    read -r exit_ip < "$EGRESS_FILE" || true
+    rm -f "$EGRESS_FILE"
+  fi
+  if [ -n "$STARTED_FILE" ] && [ -f "$STARTED_FILE" ]; then
+    started=1
+    rm -f "$STARTED_FILE"
+  fi
+
+  # A refused launch is not a session. Saying what "was not removed" when
+  # nothing was sent would be a receipt for something that never happened.
+  if [ "$started" != "1" ]; then
+    echo "calypsocode: the agent never started — nothing was sent, so no receipt." >&2
+    return "$status"
+  fi
+
+  end_epoch="$(date -u +%s)"
+  end_stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  elapsed=$((end_epoch - SESSION_START_EPOCH))
+  user="$(os_username)"
+
+  mkdir -p "$STATE_DIR"
+  receipt="$STATE_DIR/receipt-$(date -u +%Y%m%dT%H%M%SZ)-$P_PROFILE.txt"
+
+  {
+    echo "calypsocode receipt"
+    echo
+    echo "compartment:  $P_PROFILE"
+    if [ "$NETWORK" = "none" ]; then
+      echo "network:      none — no isolation. Your real IP reached $P_API_BASE."
+    elif [ -n "$exit_ip" ]; then
+      echo "network:      tor, exit $exit_ip, verified IsTor before launch"
+    elif [ "$VERIFY" = "1" ]; then
+      echo "network:      tor, but the egress check did not complete — unverified"
+    else
+      echo "network:      tor, egress NOT verified (--no-verify)"
+    fi
+    echo "identity:     git $P_GIT_NAME <$P_GIT_EMAIL>, TZ=UTC, LC_ALL=C"
+    echo "config:       compartment-local only ($COMPARTMENT_DIR)"
+    echo "session:      $SESSION_START_STAMP – $end_stamp (${elapsed}s)"
+    echo
+    echo "NOT removed:  prompt content, source code, writing style"
+    echo "              session timing — the times above are what the provider saw"
+    if path_leaks_username; then
+      echo "              OS username '$user' is in your project path ($PWD)"
+    fi
+    echo "              account: \$$P_API_KEY_ENV at $P_API_BASE — the provider"
+    echo "                       knows which paying customer this was"
+    echo
+    echo "Calypso is not in the request path, so this states session facts, not"
+    echo "contents. It cannot count requests or tell you what was sent — by design:"
+    echo "reading your traffic to report on it is the thing it refuses to do."
+  } > "$receipt"
+
+  cat "$receipt" >&2
+  echo >&2
+  echo "calypsocode: receipt written to $receipt" >&2
+
+  return "$status"
+}
+
+# --- doctor ----------------------------------------------------------------
+# Reports what it checked and what it could not check. It does not conclude
+# that the tool works: three binaries existing proves nothing, and saying
+# otherwise is what the previous version did wrong.
+
+doctor_bin() {
+  local name="$1" hint="$2"
+  if command -v "$name" >/dev/null 2>&1; then
+    echo "  ok    $name — $(command -v "$name")"
+    return 0
+  fi
+  echo "  FAIL  $name not found — $hint"
   return 1
 }
 
 doctor() {
   local failed=0
 
-  echo "calypsocode doctor — checking dependencies (no API key required)"
-  echo
-  doctor_check_bin oniux    "see README > Installation (cargo install --git ... oniux)" || failed=1
-  doctor_check_bin litellm  "pip install 'litellm[proxy]'" || failed=1
-  doctor_check_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
+  echo "checked, on this host:"
+  doctor_bin oniux    "cargo install --git https://gitlab.torproject.org/tpo/core/oniux" || failed=1
+  doctor_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
 
-  echo
-  if [ -f "$LITELLM_CONFIG" ]; then
-    echo "  ✓ LiteLLM config found: $LITELLM_CONFIG"
+  if [ -f "$PROFILE_FILE" ]; then
+    echo "  ok    profile '$P_PROFILE' parsed — $PROFILE_FILE"
+  fi
+
+  if [ -n "${!P_API_KEY_ENV:-}" ]; then
+    echo "  ok    \$$P_API_KEY_ENV is set"
   else
-    echo "  ✗ LiteLLM config missing: $LITELLM_CONFIG"
-    echo "    → cp config/litellm.config.example.yaml $LITELLM_CONFIG, then fill in your keys."
+    echo "  FAIL  \$$P_API_KEY_ENV is not set in this shell"
     failed=1
   fi
 
   echo
+  echo "not checked:"
+  echo "  egress is Tor — verified from inside the namespace at launch, not here"
+  echo "  the provider accepts this key over Tor — untested, see docs/FINDINGS.md"
+
+  echo
   if [ "$failed" = 0 ]; then
-    echo "calypsocode: everything is ready."
+    echo "calypsocode: nothing above failed. That is not the same as working —"
+    echo "the network claims are verified at launch, not by this command."
   else
-    echo "calypsocode: at least one dependency is missing — fix the ✗ above before running calypsocode." >&2
+    echo "calypsocode: fix the FAIL lines above." >&2
   fi
   return "$failed"
 }
 
+# --- argument parsing ------------------------------------------------------
+
+PROFILE_NAME="default"
+COMMAND=""
+VERIFY=1
+ASSUME_YES=0
+AGENT_ARGS=()
+
 case "${1:-}" in
-  doctor|--check)
+  doctor | profile)
+    COMMAND="$1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      [ $# -ge 2 ] || die "--profile needs a name"
+      PROFILE_NAME="$2"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE_NAME="${1#--profile=}"
+      shift
+      ;;
+    --no-verify)
+      VERIFY=0
+      shift
+      ;;
+    -y | --yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      AGENT_ARGS+=("$@")
+      break
+      ;;
+    *)
+      AGENT_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$COMMAND" ] && [ ${#AGENT_ARGS[@]} -gt 0 ]; then
+  die "$COMMAND takes no arguments other than --profile"
+fi
+
+profile_load "$PROFILE_NAME"
+
+case "$COMMAND" in
+  profile)
+    profile_show
+    exit 0
+    ;;
+  doctor)
     doctor
     exit $?
     ;;
 esac
 
-[ -f "$LITELLM_CONFIG" ] || die "config not found: $LITELLM_CONFIG
-  → copy config/litellm.config.example.yaml to that location and fill in your keys."
+# --- launch ----------------------------------------------------------------
 
-if [ "$REQUIRE_VPN" = "1" ]; then
-  ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -Eq "$VPN_IFACE_PATTERN" \
-    || die "CALYPSO_REQUIRE_VPN=1 but no recognized VPN interface is active (pattern: $VPN_IFACE_PATTERN).
-  Connect your VPN first if you want Tor-over-VPN — oniux then routes on top of the existing default route."
+NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
+case "$NETWORK" in
+  tor | none) ;;
+  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
+esac
+
+API_KEY_VALUE="${!P_API_KEY_ENV:-}"
+if [ -z "$API_KEY_VALUE" ]; then
+  die "\$$P_API_KEY_ENV is empty or unset — this compartment has no key.
+  Export it from wherever you keep secrets, then run again."
 fi
 
-PROXY_PID=""
-cleanup() {
-  if [ -n "$PROXY_PID" ]; then
-    kill "$PROXY_PID" 2>/dev/null
-  fi
-}
-trap cleanup EXIT INT TERM
+compartment_prepare
 
-case "$NETWORK_MODE" in
+# Identity. Every line removes a signal at its source, before the agent starts.
+# Nothing below inspects or modifies traffic. See docs/DESIGN.md#every-signal-decided.
+export LC_ALL=C
+export LANG=C
+export TZ=UTC
+export GIT_AUTHOR_NAME="$P_GIT_NAME"
+export GIT_AUTHOR_EMAIL="$P_GIT_EMAIL"
+export GIT_COMMITTER_NAME="$P_GIT_NAME"
+export GIT_COMMITTER_EMAIL="$P_GIT_EMAIL"
+export XDG_CONFIG_HOME="$COMPARTMENT_DIR"
+export OPENCODE_CONFIG="$OPENCODE_CONFIG_FILE"
+# Config alone is not the compartment. Measured: with only XDG_CONFIG_HOME set,
+# OpenCode still resolved data and state to the shared ~/.local/share/opencode
+# and ~/.local/state/opencode — session history and stored credentials would
+# cross between compartments. Every signal has to move at the same boundary.
+export XDG_DATA_HOME="$COMPARTMENT_DIR/data"
+export XDG_STATE_HOME="$COMPARTMENT_DIR/state"
+# The profile names the variable rather than holding the key; exporting it by
+# that name is the point. Not passed as an argument — argv is world-readable.
+# shellcheck disable=SC2163
+export "$P_API_KEY_ENV=$API_KEY_VALUE"
+
+# There is no Tor to verify in `none` mode; the warning below is the whole
+# story there.
+if [ "$NETWORK" = "none" ]; then VERIFY=0; fi
+export CALYPSO_VERIFY="$VERIFY"
+
+startup_check
+
+# The exit IP is only knowable inside the namespace, and $HOME is the way back
+# out (F7). Not /tmp — that is private to the child (F6).
+mkdir -p "$STATE_DIR"
+EGRESS_FILE="$STATE_DIR/.egress-$$"
+STARTED_FILE="$STATE_DIR/.started-$$"
+rm -f "$EGRESS_FILE" "$STARTED_FILE"
+export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
+export CALYPSO_STARTED_FILE="$STARTED_FILE"
+
+# Everything runs inside ONE oniux invocation. The host cannot reach into the
+# namespace — no --publish, no port forwarding, nothing (docs/FINDINGS.md F1).
+# Any check that has to see the namespace has to run in here.
+INNER=$(cat <<'INNER_EOF'
+set -euo pipefail
+
+if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "calypsocode: curl not found — it is what proves the egress is Tor." >&2
+    echo "calypsocode: install it, or accept an unverified session with --no-verify." >&2
+    exit 1
+  fi
+
+  echo "calypsocode: verifying egress from inside the namespace — a few seconds over Tor." >&2
+
+  CALYPSO_EXIT_IP=""
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    response="$(curl -s --max-time 60 https://check.torproject.org/api/ip || true)"
+    compact="${response// /}"
+    case "$compact" in
+      *'"IsTor":true'*)
+        CALYPSO_EXIT_IP="${compact##*\"IP\":\"}"
+        CALYPSO_EXIT_IP="${CALYPSO_EXIT_IP%%\"*}"
+        break
+        ;;
+      *'"IsTor":false'*)
+        echo "calypsocode: egress is NOT Tor. Refusing to start the agent." >&2
+        echo "calypsocode: the check answered, so traffic left this machine — it just" >&2
+        echo "calypsocode: did not go through Tor. Retrying will not fix that." >&2
+        exit 1
+        ;;
+      *)
+        echo "calypsocode: attempt $attempt/3 — no usable answer (dead circuit or timeout)." >&2
+        ;;
+    esac
+    attempt=$((attempt + 1))
+    if [ "$attempt" -le 3 ]; then sleep 2; fi
+  done
+
+  if [ -z "$CALYPSO_EXIT_IP" ]; then
+    echo "calypsocode: could not confirm Tor egress in 3 attempts." >&2
+    echo "calypsocode: roughly 1 circuit in 3 was dead in testing (docs/FINDINGS.md F4)," >&2
+    echo "calypsocode: so this is often worth simply running again." >&2
+    exit 1
+  fi
+
+  export CALYPSO_EXIT_IP
+  if [ -n "${CALYPSO_EGRESS_FILE:-}" ]; then
+    printf '%s\n' "$CALYPSO_EXIT_IP" > "$CALYPSO_EGRESS_FILE"
+  fi
+  echo "calypsocode: egress verified — Tor exit $CALYPSO_EXIT_IP" >&2
+else
+  echo "calypsocode: WARNING — egress unverified. Nothing here has checked that" >&2
+  echo "calypsocode: this session's traffic leaves via Tor." >&2
+fi
+
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "calypsocode: opencode not found — curl -fsSL https://opencode.ai/install | bash" >&2
+  exit 127
+fi
+
+# Tells the launcher a session actually happened, so it knows whether a
+# receipt is owed.
+if [ -n "${CALYPSO_STARTED_FILE:-}" ]; then
+  : > "$CALYPSO_STARTED_FILE"
+fi
+
+exec opencode "$@"
+INNER_EOF
+)
+
+SESSION_START_EPOCH="$(date -u +%s)"
+SESSION_START_STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SESSION_STARTED=1
+# Ctrl-C is how an agent session normally ends. Bash does run the EXIT trap on
+# an untrapped SIGINT (measured on 5.3), so the receipt survives either way —
+# what these traps buy is the exit status. Without them a signalled launcher
+# can exit 0, reporting success for a session the user interrupted.
+# RECEIPT_DONE stops the signal path and the EXIT path both writing one.
+trap receipt_write EXIT
+trap 'receipt_write; exit 130' INT
+trap 'receipt_write; exit 143' TERM
+
+STATUS=0
+case "$NETWORK" in
   tor)
-    command -v oniux >/dev/null 2>&1 || die "oniux not found — see README (installation)."
-    oniux litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
-    PROXY_PID=$!
+    command -v oniux >/dev/null 2>&1 \
+      || die "oniux not found — cargo install --git https://gitlab.torproject.org/tpo/core/oniux"
+    oniux bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
     ;;
   none)
-    echo "calypsocode: WARNING — 'none' mode, no network isolation active." >&2
-    litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
-    PROXY_PID=$!
-    ;;
-  *)
-    die "invalid CALYPSO_NETWORK: '$NETWORK_MODE' (accepted values: tor, none)"
+    echo "calypsocode: WARNING — network 'none'. No isolation: your real IP" >&2
+    echo "calypsocode: reaches $P_API_BASE and the compartment covers identity only." >&2
+    bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
     ;;
 esac
 
-echo "calypsocode: starting proxy (network: $NETWORK_MODE, port $PROXY_PORT)..." >&2
-for _ in $(seq 1 40); do
-  curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 && break
-  sleep 0.5
-done
-curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 \
-  || die "LiteLLM proxy did not start in time — see $LOG_FILE"
-
-echo "calypsocode: proxy ready on 127.0.0.1:${PROXY_PORT}, launching OpenCode." >&2
-
-command -v opencode >/dev/null 2>&1 || die "opencode not found — see README (installation)."
-exec opencode "$@"
+exit "$STATUS"

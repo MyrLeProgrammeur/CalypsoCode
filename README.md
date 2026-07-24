@@ -2,101 +2,115 @@
 
 # CalypsoCode
 
-Your coding agent, compartmented — separate keys, separate network paths,
-separate contexts per project, with a receipt proving what left your machine.
+CalypsoCode removes a defined set of identifiers — network address, git
+identity, environment metadata, agent config — from what your coding agent
+transmits, and reports per session what it removed and what it did not.
 
-> **Status: redesign in progress. `bin/calypsocode` does not currently run.**
-> The original architecture was proven unimplementable by testing (see
-> [docs/FINDINGS.md](docs/FINDINGS.md) — a host process cannot reach a port
-> bound inside an `oniux` namespace). The replacement design is in
-> [docs/DESIGN.md](docs/DESIGN.md); build order in
-> [docs/ROADMAP.md](docs/ROADMAP.md). Do not treat this repo as a working
-> privacy tool yet.
+> **Status: it works, and the premise has been measured once.** A real coding
+> session ran end-to-end through the launcher over Tor — 8 round trips, 3.8s
+> mean, 0 failures ([the gate](docs/ROADMAP.md#gate)). That is an existence
+> proof, not a track record: one task, one provider, one day. What a single
+> session cannot show — how a provider reacts to Tor-origin traffic over weeks,
+> how the latency feels on a large repository — is listed in
+> [docs/FINDINGS.md](docs/FINDINGS.md#still-untested).
 
 ## The idea
 
-Run a coding agent against privacy-focused providers (Venice, Tinfoil —
-censored or uncensored models) in a way that keeps the person writing the code
-as untraceable as the stack allows.
+**Calypso erases who is asking. Not what is asked.**
 
-The unit is a **profile**:
+Whether a provider can *read* your code and prompts is a property of the
+provider you buy from — pick a hardware enclave like Tinfoil if that matters to
+you. Whether they can tell it was *you* asking is a different problem, and
+nobody serves it well. That's this project.
 
-```yaml
-profile: client-acme
-  network: tor          # tor | vpn | direct | socks
-  key:     venice_acme  # bound to this compartment only
-  model:   uncensored
-  scrub:   strict
-  retire:  30d
+The unit is a **profile** — one file per compartment, in
+`~/.config/calypsocode/profiles/`:
+
+```sh
+PROFILE=client-acme
+NETWORK=tor                        # tor | none
+API_KEY_ENV=VENICE_API_KEY_ACME    # names the variable, never holds the key
+API_BASE=https://api.venice.ai/api/v1
+MODEL=zai-org-glm-5-1
+GIT_NAME=dev
+GIT_EMAIL=dev@localhost
 ```
 
-One launch = one namespace = one circuit = one key = one context. Nothing
+One launch = one namespace = one circuit = one key = one config. Nothing
 crosses between compartments.
 
-This serves more people than a Tor wrapper does. Anyone who does not want
-project A's agent traffic, keys, and context bleeding into project B's —
-consultants with multiple clients, people under NDA boundaries, people whose
-employer bans AI tooling on some repos — wants the same machinery, with
-`network:` set to something other than `tor`.
+This is for people whose **network is observed** while their account is not the
+threat: developers in censoring jurisdictions, people whose employer or ISP
+monitors what they connect to, people where certain questions are dangerous to
+be seen asking. Your provider still knows which customer is paying. What the
+observer between you and the provider learns is nothing — including which model
+you chose, uncensored or otherwise.
+
+## How it works: configure, don't rewrite
+
+Calypso never inspects or modifies your traffic. Every identifier it removes is
+removed **before the agent starts**, by controlling the environment it runs in:
+
+```
+oniux                     # IP address → Tor, fail-closed at the kernel
+LC_ALL=C                  # no locale leak
+TZ=UTC                    # no timezone inference
+GIT_AUTHOR_NAME=dev       # git stops printing your name
+XDG_CONFIG_HOME=<compartment>   # your global agent config never loads
+```
+
+Each line removes a signal at its source, so the identifying value is never
+produced. That's more reliable than scrubbing it afterwards, and it can't
+corrupt your code.
 
 ## Why compartments, not key rotation
 
-Identity is not your name. To a provider it is the set of signals that link two
-requests to the same person: exit IP, API key, payment, **content**, timing,
-client fingerprint.
+Identity isn't your name — it's the set of signals that link two requests to
+the same person. A compartment is only as isolated as its weakest shared
+signal, so every signal has to change at the same boundary.
 
-A compartment is only as isolated as its weakest shared signal, so every signal
-must change at the same boundary. The original design rotated API keys per
-request over one shared Tor circuit — which rotates the credential while
-holding the network constant, and so hands the provider a proof that those
-accounts are the same person. [Full reasoning](docs/DESIGN.md#why-per-request-rotation-was-wrong).
-
-## The leak nobody fixes
-
-A coding agent sends file paths, diffs, and stack traces constantly:
-
-```
-/home/<user>/dev/client-acme/src/billing.ts
-Author: <Real Name> <real.email@example.com>
-```
-
-Tor does nothing about that. Neither does a VPN, key rotation, or a TEE. You
-can have kernel-level network isolation and still leak your username in the
-payload on request one. Scrubbing that is the part a coding-agent-specific tool
-can do and a general-purpose proxy cannot.
+The original design rotated API keys per request over one shared Tor circuit,
+which rotates the credential while holding the network constant — handing the
+provider a proof that those accounts are the same person.
+[Full reasoning](docs/DESIGN.md#why-per-request-rotation-was-wrong).
 
 ## Proof, not claims
 
 Privacy tools assert; almost none demonstrate. The goal is a **session
 receipt**: on exit, state exactly what left the machine, under which identity,
-through which exit, with which scrubs applied and which enclave attestation
-verified. Egress proof and negative leak tests included —
-[details](docs/DESIGN.md#proof-not-claims).
+through which exit — and what was *not* removed, including your account, your
+prompt content, and your session timing.
+[Details](docs/DESIGN.md#proof-not-claims).
 
 ## What is verified
 
 Everything in [docs/FINDINGS.md](docs/FINDINGS.md) was measured, not assumed:
 
 - `oniux` isolation is fail-closed at the kernel routing level ✅
-- Venice and Tinfoil do **not** block Tor exits (unauthenticated endpoints) ✅
+- Venice and Tinfoil do **not** block Tor exits ✅
+- Authenticated, billed inference over Tor works — HTTP 200 in 3.0s ✅
+- A real coding session ran end-to-end: 8 round trips, 3.8s mean, 0 failures ✅
 - Distinct SOCKS credentials yield distinct circuits ✅
 - `oniux` injects `ALL_PROXY`, which silently breaks same-namespace loopback ⚠️
+- `XDG_CONFIG_HOME` alone does **not** compartment an agent — data and state
+  move separately, and did not until this was measured ⚠️
 - LiteLLM cannot bind a proxy per model ❌
-- Authenticated inference over Tor, and real session latency — **untested**
+- Provider response to Tor traffic **over weeks**, and latency on a large
+  repository — **untested**
 
 ## Limits
 
-[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) states what this hides and what it
-does not. Read it before trusting this tool for anything. A privacy tool that
-oversells its guarantees is worse than useless.
+This is orthogonal to content confidentiality and to whichever provider you
+choose. [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) states what is and isn't
+covered, including the two things that cannot be removed: your account, and
+your writing style. Read it before trusting this tool for anything.
 
 ## Prior art
 
-[oniux](https://gitlab.torproject.org/tpo/core/oniux) does the isolation half
-as a one-liner; [LLM-Tor](https://github.com/prince776/LLM-Tor) does the
-identity half properly with blind signatures. Neither addresses
-compartmentalization or content scrubbing for coding agents. See
-[docs/ROADMAP.md](docs/ROADMAP.md#prior-art).
+[oniux](https://gitlab.torproject.org/tpo/core/oniux) does the network
+isolation as a one-liner; [LLM-Tor](https://github.com/prince776/LLM-Tor) tackles
+account identity with blind signatures. Neither does per-compartment identity
+for coding agents. See [docs/ROADMAP.md](docs/ROADMAP.md#prior-art).
 
 ## Contributing
 

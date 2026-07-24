@@ -22,9 +22,10 @@
 #    See docs/FINDINGS.md (F2).
 #
 # Note also that LiteLLM is OPTIONAL in the new design — OpenCode speaks to
-# OpenAI-compatible providers directly. Keep a proxy layer only for
-# cross-provider fallback, model aliasing, or content scrubbing; never for
-# anonymity. See docs/DESIGN.md#is-litellm-required.
+# OpenAI-compatible providers directly. With content rewriting out of scope,
+# nothing requires Calypso to sit in the request path at all. Keep a proxy layer
+# only for cross-provider fallback or model aliasing; never for anonymity.
+# See docs/DESIGN.md#is-litellm-required.
 #
 # Copy to ~/.config/calypsocode/litellm.config.yaml then fill in your own API
 # keys (each on YOUR account — no key shared between several people, see

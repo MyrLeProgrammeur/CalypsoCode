@@ -3,11 +3,10 @@
 Thanks for the interest. This project is small and deliberately simple —
 contributions are welcome, but let's keep that spirit.
 
-> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The project is mid-
-> redesign: `bin/calypsocode` does not run, and the architecture it implements
-> was disproven by testing ([docs/FINDINGS.md](docs/FINDINGS.md)). PRs that
-> extend the current script will be declined — it is to be rewritten around
-> the profile model in [docs/DESIGN.md](docs/DESIGN.md), not patched.
+> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The launcher runs, but the
+> premise behind it is unmeasured: no real coding session has gone through it
+> yet ([the gate](docs/ROADMAP.md#gate)). Anything that assumes Tor is usable
+> for agentic work is assuming what this project has not yet shown.
 
 ## No CLA
 
@@ -31,25 +30,76 @@ stays AGPL-3.0, same as the rest of the project.
   states its evidence, and untested things are marked untested. Do not add
   inferences to that file — they belong in `DESIGN.md`.
 
+## Git conventions
+
+**Branches.** `main` is protected: no direct pushes, CI green to merge. Work
+happens on a branch named `type/short-description` in kebab-case — `feat/`,
+`fix/`, `refactor/`, `chore/`, `docs/`, `test/`. Branches are short-lived; if
+one lives longer than a few days it should have been split.
+
+When a branch executes a plan from `docs/plans/`, name it after the plan's slug
+so the two are obviously the same piece of work.
+
+**Commits.** A conventional subject line, then prose:
+
+```
+feat(launcher): verify egress is Tor before the agent starts
+
+The check runs inside the namespace, because that is the only place it can
+run — the host cannot observe the namespace's egress (F1).
+
+A dead circuit and a non-Tor egress are different failures and are treated
+differently. [...]
+```
+
+The subject keeps the history scannable and leaves the door open to generated
+changelogs. The body is where the value is: **why** the change is right, and
+what was measured. A commit that explains only what it did has thrown away the
+part a reader cannot reconstruct from the diff.
+
+**Merges.** Merge commits, not squash. Each commit in this project is meant to
+stand on its own as a record of a decision and its evidence; collapsing a
+branch into one line deletes exactly the part worth keeping. Rebase your own
+branch onto `main` before opening the PR, and use `--force-with-lease`, never
+`--force`.
+
+Delete branches after merge.
+
 ## Local checks before pushing
 
 There's no test suite yet (the project is currently a bash script plus config).
 Before pushing:
 
 ```bash
-# Syntax and best practices for the main script
+# The test suite — hermetic, no network, no Tor, a few seconds
+./test/run.sh
+./test/run.sh receipt          # one suite
+
+# Syntax and best practices
 shellcheck bin/calypsocode
+shellcheck -x test/run.sh test/helpers.sh test/*.test.sh
 
 # Config files are valid YAML/JSON
 yamllint config/*.yaml
 python3 -m json.tool config/opencode.json.example > /dev/null
+
+# No secrets, in the diff or anywhere in history
+gitleaks detect --source . --redact
 ```
 
-CI (`.github/workflows/ci.yml`) runs these same checks on every PR. Note that
-`./bin/calypsocode doctor` currently passes while the tool itself cannot run —
-a green check is not evidence the stack works. Fixing that (a `doctor` that
-proves properties instead of asserting them) is
-[roadmap item 3](docs/ROADMAP.md#build-order).
+The tests stub the agent and the network, so they exercise the launcher's
+logic rather than the machine's connectivity. **A test that passes against
+broken code is worse than no test** — when you add one, break the code
+deliberately and check that it fails.
+
+If `shellcheck` is not installed, `bash -n bin/calypsocode` catches syntax
+errors but nothing else. CI runs everything above on every branch and every
+PR, so a green local check is not a green CI.
+
+`./bin/calypsocode doctor` reports what it checked and what it could not; it
+does not claim the stack works. Keep it that way. A `doctor` that concludes
+"everything is ready" because three binaries exist is what the first version
+did, and it was wrong the entire time the tool could not run at all.
 
 ## Style
 
@@ -63,6 +113,13 @@ proves properties instead of asserting them) is
 
 Explicitly **out of scope** (see [docs/ROADMAP.md](docs/ROADMAP.md#decisions-taken)):
 
+- **Content rewriting of any kind** — prompts, code, or tool calls. Calypso
+  erases who is asking, not what is asked. Two-way translation with per-session
+  state fails silently and can corrupt a user's source.
+- **Filesystem mounts and path remapping.** Considered and dropped; the leak it
+  addressed is handled by user-side convention.
+- **Verifying other providers' guarantees** (enclave attestation, no-logging
+  policy). Provider choice belongs to the user.
 - Any hosted or pooled service shared between multiple users — ruled out on
   provider-ToS grounds.
 - Rebuilding the coding agent itself. Wrap or fork OpenCode; the

@@ -159,15 +159,119 @@ host. `bin/calypsocode` writes its LiteLLM log to `/tmp/calypsocode-litellm.log`
 and then tells the user to read it on failure — pointing at a file that does
 not exist outside the namespace.
 
+## F7 — `$HOME` is shared with the host; only `/tmp` is private
+
+**Status: confirmed.**
+
+The private mount from [F6](#f6--oniux-uses-a-private-tmp-by-default) covers
+`/tmp` and not `$HOME`. A file written by the wrapped process appears on the
+host immediately:
+
+```
+inside:  echo "written from inside the namespace" > ~/.local/state/calypsocode/probe
+host:    cat ~/.local/state/calypsocode/probe
+         written from inside the namespace
+```
+
+The same run corroborates F6 from the other direction: an executable placed in
+a `/tmp` subdirectory and added to `PATH` was **not found** inside the
+namespace, because that path does not exist there.
+
+**Consequence.** The session receipt is written from inside the namespace to
+`~/.local/state/calypsocode/` and read on the host. No host-side file handle has
+to be passed in, and nothing may be written to `/tmp`.
+
+## F8 — A real agentic session works over Tor, at ~4s per round trip
+
+**Status: confirmed. This is [the gate](ROADMAP.md#gate).**
+
+OpenCode 1.18.4 through `bin/calypsocode`, Venice `zai-org-glm-5-1`, one task:
+write `fizzbuzz.py`, run it with `python3` to check it, write a README. The
+agent completed it correctly and the script produces correct output.
+
+| | |
+|---|---|
+| Wall clock | 35s, including egress verification |
+| Assistant round trips | 8 |
+| Round trip min / mean / max | 2.1s / 3.8s / 9.0s |
+| Failed requests during the session | 0 |
+| Tokens | 15.4K in, 637 out, 104K cache read |
+| Exit | 185.220.101.16, verified `IsTor` before launch |
+
+**Authenticated inference was tested separately first**, because it is the risk
+[F4](#f4--venice-and-tinfoil-do-not-block-tor-exits) explicitly did not cover:
+`POST /chat/completions` with a real key over Tor returned **HTTP 200 in 3.0s**
+(exit 185.220.101.23), billed normally — the response carried
+`"cost":{"usd":0.001586266}`. Venice does not treat billable Tor-origin traffic
+differently from the public `/models` endpoint.
+
+**Caveats, stated plainly:**
+
+- One task, one provider, one session, one day. This is an existence proof that
+  the premise holds, not a latency distribution.
+- The first round trip is the slow one (9.0s). The rest sat between 2.1s and
+  4.2s.
+- One circuit was dead immediately before this run and needed a retry, matching
+  F4's roughly-1-in-3 rate. The launcher's retry handled it.
+- Nothing here says anything about a long session, a large repo, or how a
+  provider's fraud heuristics respond over weeks.
+
+**Consequence.** Tor stays the default. ~4s per round trip is materially slower
+than clearnet and it is not the thing that makes an agentic session unusable.
+
+## F9 — `XDG_CONFIG_HOME` alone does not compartment OpenCode
+
+**Status: confirmed. It changed the launcher.**
+
+Good news first: a marker provider planted in the host's global
+`~/.config/opencode/opencode.json` did **not** appear in `opencode debug config`
+inside a compartment. OpenCode honours `XDG_CONFIG_HOME`, so config isolation
+works — that was an open question and it is now answered.
+
+But config is not the compartment. With only `XDG_CONFIG_HOME` set,
+`opencode debug paths` reported:
+
+```
+config     …/compartments/gate/opencode      ← moved
+data       /home/matheo/.local/share/opencode ← SHARED
+state      /home/matheo/.local/state/opencode ← SHARED
+```
+
+`data` is where session history and stored provider credentials live. Two
+compartments would have shared both, which is precisely the failure the
+[compartment rule](DESIGN.md#the-rule-for-compartments) forbids: rotate the key
+and the config, keep one history, and the history links them.
+
+**Fix.** `bin/calypsocode` also sets `XDG_DATA_HOME` and `XDG_STATE_HOME`, after
+which config, data, state and log all resolve inside the compartment.
+`XDG_CACHE_HOME` is deliberately left shared: it holds downloaded packages and
+binaries, carries no identity, and moving it would re-download them through Tor
+for every compartment.
+
+**The general lesson.** An agent's identity surface is not one directory. Any
+new agent wrapped by Calypso needs this enumerated, not assumed — `debug paths`
+or its equivalent, checked, before claiming the compartment holds.
+
 ---
 
 ## Still untested
 
-These gate the project and none of them are answered yet.
+The premise risks are answered ([F8](#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip),
+[F9](#f9--xdg_config_home-alone-does-not-compartment-opencode)). What is left is
+what one session cannot show.
 
-1. **Authenticated inference over Tor.** Needs a real Venice key and a
-   `POST /chat/completions`. The single most likely remaining premise risk.
-2. **Provider ToS / fraud response** to Tor-origin API traffic over time.
-3. **Latency of a real agentic session.** Dozens of sequential round trips,
-   each crossing three relays. Unmeasured, and the likeliest reason a user
-   would not run the tool twice. See [ROADMAP.md](ROADMAP.md#gate).
+1. **Provider ToS / fraud response** to Tor-origin API traffic over time. One
+   session proves the request is accepted, not that an account survives weeks of
+   rotating exits. Unchanged, and still the risk that would hurt a real user
+   most.
+2. **Latency on real work.** F8 measured a small, self-contained task. A large
+   repository, long context, and a session of hundreds of round trips are not
+   the same thing — at 3.8s each, the cost is linear and adds up.
+3. **Whether a compartment holds over time.** F9 enumerated OpenCode's paths
+   once, on one version. An agent that later writes somewhere new — a plugin
+   cache, an MCP server's own state — reopens the question silently. Nothing
+   currently re-checks it.
+4. **Negative leak test.** [DESIGN](DESIGN.md#proof-not-claims) asks for the
+   test that deliberately attempts what must fail — reach a host interface,
+   resolve DNS outside the namespace — and asserts it does. The isolation is
+   currently trusted on F1's routing table, not proven per session.

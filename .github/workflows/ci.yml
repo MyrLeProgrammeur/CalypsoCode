@@ -1,24 +1,41 @@
 name: CI
 
+# Runs on every branch, not just main. A pipeline that only fires on the
+# default branch pushes you toward committing there, which is the habit the
+# branch protection is meant to remove.
 on:
   push:
-    branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  SHELLCHECK_VERSION: "0.11.0"
+
 jobs:
+  # Fastest feedback first: a lint failure in seconds beats a test run.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not apt. The distro package lags, and its diagnostics differ
+      # from a current release — which is how a locally-clean script failed
+      # here on the first run. Same binary locally and in CI, or the check is
+      # not reproducible.
       - name: Install linters
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y shellcheck
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          ./shellcheck --version
           pip install --quiet yamllint
 
-      - name: ShellCheck bin/calypsocode
-        run: shellcheck bin/calypsocode
+      - name: ShellCheck
+        run: |
+          ./shellcheck bin/calypsocode
+          ./shellcheck -x test/run.sh test/helpers.sh test/*.test.sh
 
       - name: Validate YAML in config/
         run: |
@@ -36,3 +53,35 @@ jobs:
             echo "Checking $f"
             python3 -m json.tool "$f" > /dev/null
           done
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hermetic: no network, no Tor, no real agent. Everything the launcher
+      # talks to is stubbed, so a green run here means the logic is right, not
+      # that the machine happened to be online.
+      - name: Run the test suite
+        run: ./test/run.sh
+
+  # A tool whose entire subject is keeping secrets out of the wrong places has
+  # no business leaking one into its own history.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so the scan can see past commits
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks version
+
+      - name: Scan working tree
+        run: ./gitleaks detect --source . --no-git --redact --exit-code 1
+
+      - name: Scan full history
+        run: ./gitleaks detect --source . --redact --exit-code 1
