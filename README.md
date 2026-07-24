@@ -1,6 +1,5 @@
-<!-- remplace OWNER par ton compte/organisation GitHub une fois le dépôt poussé -->
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![CI](https://github.com/OWNER/cloakcode/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/cloakcode/actions/workflows/ci.yml)
+[![CI](https://github.com/MyrLeProgrammeur/cloakcode/actions/workflows/ci.yml/badge.svg)](https://github.com/MyrLeProgrammeur/cloakcode/actions/workflows/ci.yml)
 
 # cloakcode
 
