@@ -146,15 +146,32 @@ Each line removes a signal at its source, so the bad value is never produced.
 That is strictly more reliable than detecting and removing it afterwards, and it
 cannot corrupt anything.
 
-### Profile schema (sketch)
+### Profile schema
 
-```yaml
-profile: client-acme
-  network: tor          # tor | vpn | direct | socks
-  key:     venice_acme  # bound to this compartment only
-  model:   uncensored
-  retire:  30d
+One flat `KEY=value` file per compartment, at
+`~/.config/calypsocode/profiles/<name>.env`:
+
+```sh
+PROFILE=client-acme
+NETWORK=tor                        # v1 implements tor | none
+API_KEY_ENV=VENICE_API_KEY_ACME    # names the variable, never holds the key
+API_BASE=https://api.venice.ai/api/v1
+MODEL=zai-org-glm-5-1              # model choice is the user's, uncensored or not
+GIT_NAME=dev
+GIT_EMAIL=dev@localhost
 ```
+
+Flat text, not YAML: it needs no parser beyond a `read` loop and adds no
+runtime dependency. The file is **read, never sourced** — a config file must not
+be able to run code. Unknown keys are refused rather than ignored, so a typo
+fails loudly instead of silently dropping a compartment boundary.
+
+The key itself stays out of the file, which lives in a config directory that
+tends to end up in backups and dotfile repos. The profile names the environment
+variable; the user exports it from wherever they keep secrets.
+
+Retirement (`retire: 30d`) and the `vpn` / `direct` / `socks` backends are
+design, not v1 — see [network backends](#network-backends).
 
 One launch = one namespace = one circuit = one key = one config. Nothing
 crosses.

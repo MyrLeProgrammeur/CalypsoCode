@@ -1,129 +1,237 @@
 #!/usr/bin/env bash
-# calypsocode — LEGACY, DOES NOT WORK. Kept for reference only.
+# calypsocode — run a coding agent under a compartment identity.
 #
-# This script implements the pre-testing architecture:
-#   oniux(litellm proxy) --Tor--> Venice / Tinfoil / other provider
-#   opencode --local loopback--> litellm proxy (127.0.0.1)
+# Calypso erases who is asking, not what is asked. Nothing here inspects or
+# modifies traffic: every identifier is removed before the agent starts, by
+# controlling the environment it runs in.
 #
-# That architecture is NOT IMPLEMENTABLE. oniux places the proxy in its own
-# network namespace, which has its own loopback stack, so a host-side
-# opencode can never reach 127.0.0.1:$PROXY_PORT. In `tor` mode this script
-# always exhausts its health-check loop and dies with "LiteLLM proxy did not
-# start in time". See docs/FINDINGS.md (F1).
-#
-# Two further defects, both verified:
-#   - oniux injects ALL_PROXY=socks5h://localhost:9050, which makes
-#     proxy-aware clients tunnel even loopback through Tor, where it is
-#     refused. Any same-namespace loopback hop needs NO_PROXY=127.0.0.1
-#     (FINDINGS.md F2).
-#   - oniux uses a private /tmp by default, so $LOG_FILE is invisible from
-#     the host — the failure message above points at a file that does not
-#     exist (FINDINGS.md F6).
-#
-# The replacement design is docs/DESIGN.md (profiles and compartments);
-# build order is docs/ROADMAP.md. Do not extend this script — it is to be
-# rewritten, not patched.
+# Design: docs/DESIGN.md · Verified stack behaviour: docs/FINDINGS.md
 set -euo pipefail
 
-CONFIG_DIR="${CALYPSO_CONFIG_DIR:-$HOME/.config/calypsocode}"
-LITELLM_CONFIG="${CALYPSO_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
-PROXY_PORT="${CALYPSO_PROXY_PORT:-4000}"
-NETWORK_MODE="${CALYPSO_NETWORK:-tor}"   # tor | none
-REQUIRE_VPN="${CALYPSO_REQUIRE_VPN:-0}"  # 1 = fail if no VPN interface is detected
-LOG_FILE="${CALYPSO_LOG_FILE:-/tmp/calypsocode-litellm.log}"
+PROFILE_DIR="${CALYPSO_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode/profiles}"
 
-VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
+# Keys accepted in a profile file. Anything else is a typo and is refused.
+PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
+PROFILE_REQUIRED=(NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
+
+PROFILE_FILE=""
 
 die() { echo "calypsocode: $*" >&2; exit 1; }
 
-# --- calypsocode doctor / --check -----------------------------------------
-# Checks dependencies without needing API keys or network access.
-doctor_check_bin() {
+usage() {
+  cat <<'EOF'
+calypsocode — run a coding agent under a compartment identity.
+
+usage:
+  calypsocode [--profile NAME] [agent args...]
+  calypsocode profile [--profile NAME]
+  calypsocode doctor
+  calypsocode --help
+
+options:
+  --profile NAME   compartment to launch (default: default). Resolved to
+                   ~/.config/calypsocode/profiles/NAME.env
+
+commands:
+  profile          print the resolved profile and exit
+  doctor           report what is and is not ready, without launching
+
+Every profile is one namespace, one circuit, one key, one config. Nothing
+crosses between compartments — see docs/DESIGN.md.
+EOF
+}
+
+# --- profile loading -------------------------------------------------------
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+profile_key_known() {
+  local k
+  for k in "${PROFILE_KEYS[@]}"; do
+    if [ "$k" = "$1" ]; then return 0; fi
+  done
+  return 1
+}
+
+# Parses KEY=value lines into P_<KEY> shell variables. The file is read, never
+# sourced: a profile lives in a config directory and must not be able to run
+# code.
+profile_load() {
+  local name="$1"
+  PROFILE_FILE="$PROFILE_DIR/$name.env"
+
+  if [ ! -f "$PROFILE_FILE" ]; then
+    die "profile '$name' not found: $PROFILE_FILE
+  → mkdir -p '$PROFILE_DIR' && cp config/profile.example.env '$PROFILE_FILE'
+    then edit it, or select another one with --profile NAME."
+  fi
+
+  local lineno=0 line key value var
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"
+    line="$(trim "$line")"
+    case "$line" in
+      '' | '#'*) continue ;;
+      *=*) ;;
+      *) die "$PROFILE_FILE:$lineno: not a KEY=value line: $line" ;;
+    esac
+
+    key="$(trim "${line%%=*}")"
+    value="$(trim "${line#*=}")"
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}" ;;
+      \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+
+    if ! profile_key_known "$key"; then
+      die "$PROFILE_FILE:$lineno: unknown key '$key' (accepted: ${PROFILE_KEYS[*]})"
+    fi
+    printf -v "P_$key" '%s' "$value"
+  done < "$PROFILE_FILE"
+
+  for key in "${PROFILE_REQUIRED[@]}"; do
+    var="P_$key"
+    if [ -z "${!var:-}" ]; then
+      die "$PROFILE_FILE: missing required key '$key'"
+    fi
+  done
+
+  : "${P_PROFILE:=$name}"
+
+  case "$P_NETWORK" in
+    tor | none) ;;
+    *) die "$PROFILE_FILE: NETWORK='$P_NETWORK' — v1 accepts 'tor' or 'none'" ;;
+  esac
+}
+
+profile_show() {
+  echo "profile:      $P_PROFILE"
+  echo "file:         $PROFILE_FILE"
+  echo "network:      $P_NETWORK"
+  echo "api_base:     $P_API_BASE"
+  echo "model:        $P_MODEL"
+  echo "git identity: $P_GIT_NAME <$P_GIT_EMAIL>"
+  if [ -n "${!P_API_KEY_ENV:-}" ]; then
+    echo "api key:      \$$P_API_KEY_ENV is set"
+  else
+    echo "api key:      \$$P_API_KEY_ENV is NOT set in this shell"
+  fi
+}
+
+# --- doctor ----------------------------------------------------------------
+# Reports what it checked and what it could not check. It does not conclude
+# that the tool works: three binaries existing proves nothing, and saying
+# otherwise is what the previous version did wrong.
+
+doctor_bin() {
   local name="$1" hint="$2"
   if command -v "$name" >/dev/null 2>&1; then
-    echo "  ✓ $name  ($(command -v "$name"))"
+    echo "  ok    $name — $(command -v "$name")"
     return 0
   fi
-  echo "  ✗ $name not found — $hint"
+  echo "  FAIL  $name not found — $hint"
   return 1
 }
 
 doctor() {
   local failed=0
 
-  echo "calypsocode doctor — checking dependencies (no API key required)"
-  echo
-  doctor_check_bin oniux    "see README > Installation (cargo install --git ... oniux)" || failed=1
-  doctor_check_bin litellm  "pip install 'litellm[proxy]'" || failed=1
-  doctor_check_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
+  echo "checked, on this host:"
+  doctor_bin oniux    "cargo install --git https://gitlab.torproject.org/tpo/core/oniux" || failed=1
+  doctor_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
 
-  echo
-  if [ -f "$LITELLM_CONFIG" ]; then
-    echo "  ✓ LiteLLM config found: $LITELLM_CONFIG"
+  if [ -f "$PROFILE_FILE" ]; then
+    echo "  ok    profile '$P_PROFILE' parsed — $PROFILE_FILE"
+  fi
+
+  if [ -n "${!P_API_KEY_ENV:-}" ]; then
+    echo "  ok    \$$P_API_KEY_ENV is set"
   else
-    echo "  ✗ LiteLLM config missing: $LITELLM_CONFIG"
-    echo "    → cp config/litellm.config.example.yaml $LITELLM_CONFIG, then fill in your keys."
+    echo "  FAIL  \$$P_API_KEY_ENV is not set in this shell"
     failed=1
   fi
 
   echo
+  echo "not checked:"
+  echo "  egress is Tor — verified from inside the namespace at launch, not here"
+  echo "  the provider accepts this key over Tor — untested, see docs/FINDINGS.md"
+
+  echo
   if [ "$failed" = 0 ]; then
-    echo "calypsocode: everything is ready."
+    echo "calypsocode: nothing above failed. That is not the same as working —"
+    echo "the network claims are verified at launch, not by this command."
   else
-    echo "calypsocode: at least one dependency is missing — fix the ✗ above before running calypsocode." >&2
+    echo "calypsocode: fix the FAIL lines above." >&2
   fi
   return "$failed"
 }
 
+# --- argument parsing ------------------------------------------------------
+
+PROFILE_NAME="default"
+COMMAND=""
+AGENT_ARGS=()
+
 case "${1:-}" in
-  doctor|--check)
+  doctor | profile)
+    COMMAND="$1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      [ $# -ge 2 ] || die "--profile needs a name"
+      PROFILE_NAME="$2"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE_NAME="${1#--profile=}"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      AGENT_ARGS+=("$@")
+      break
+      ;;
+    *)
+      AGENT_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$COMMAND" ] && [ ${#AGENT_ARGS[@]} -gt 0 ]; then
+  die "$COMMAND takes no arguments other than --profile"
+fi
+
+profile_load "$PROFILE_NAME"
+
+case "$COMMAND" in
+  profile)
+    profile_show
+    exit 0
+    ;;
+  doctor)
     doctor
     exit $?
     ;;
 esac
 
-[ -f "$LITELLM_CONFIG" ] || die "config not found: $LITELLM_CONFIG
-  → copy config/litellm.config.example.yaml to that location and fill in your keys."
-
-if [ "$REQUIRE_VPN" = "1" ]; then
-  ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -Eq "$VPN_IFACE_PATTERN" \
-    || die "CALYPSO_REQUIRE_VPN=1 but no recognized VPN interface is active (pattern: $VPN_IFACE_PATTERN).
-  Connect your VPN first if you want Tor-over-VPN — oniux then routes on top of the existing default route."
-fi
-
-PROXY_PID=""
-cleanup() {
-  if [ -n "$PROXY_PID" ]; then
-    kill "$PROXY_PID" 2>/dev/null
-  fi
-}
-trap cleanup EXIT INT TERM
-
-case "$NETWORK_MODE" in
-  tor)
-    command -v oniux >/dev/null 2>&1 || die "oniux not found — see README (installation)."
-    oniux litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
-    PROXY_PID=$!
-    ;;
-  none)
-    echo "calypsocode: WARNING — 'none' mode, no network isolation active." >&2
-    litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
-    PROXY_PID=$!
-    ;;
-  *)
-    die "invalid CALYPSO_NETWORK: '$NETWORK_MODE' (accepted values: tor, none)"
-    ;;
-esac
-
-echo "calypsocode: starting proxy (network: $NETWORK_MODE, port $PROXY_PORT)..." >&2
-for _ in $(seq 1 40); do
-  curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 && break
-  sleep 0.5
-done
-curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 \
-  || die "LiteLLM proxy did not start in time — see $LOG_FILE"
-
-echo "calypsocode: proxy ready on 127.0.0.1:${PROXY_PORT}, launching OpenCode." >&2
-
-command -v opencode >/dev/null 2>&1 || die "opencode not found — see README (installation)."
-exec opencode "$@"
+die "launching is not implemented yet — see docs/ROADMAP.md#build-order.
+  'calypsocode profile' resolves and prints a compartment."

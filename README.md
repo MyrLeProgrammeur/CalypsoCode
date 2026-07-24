@@ -22,14 +22,17 @@ provider you buy from — pick a hardware enclave like Tinfoil if that matters t
 you. Whether they can tell it was *you* asking is a different problem, and
 nobody serves it well. That's this project.
 
-The unit is a **profile**:
+The unit is a **profile** — one file per compartment, in
+`~/.config/calypsocode/profiles/`:
 
-```yaml
-profile: client-acme
-  network: tor          # tor | vpn | direct | socks
-  key:     venice_acme  # bound to this compartment only
-  model:   uncensored
-  retire:  30d
+```sh
+PROFILE=client-acme
+NETWORK=tor                        # tor | none
+API_KEY_ENV=VENICE_API_KEY_ACME    # names the variable, never holds the key
+API_BASE=https://api.venice.ai/api/v1
+MODEL=zai-org-glm-5-1
+GIT_NAME=dev
+GIT_EMAIL=dev@localhost
 ```
 
 One launch = one namespace = one circuit = one key = one config. Nothing
