@@ -1,16 +1,16 @@
-# Copier vers ~/.config/cloakcode/litellm.config.yaml puis renseigner tes propres
-# clés d'API (chacune sur TON compte — pas de clé partagée entre plusieurs personnes,
-# voir docs/THREAT-MODEL.md sur pourquoi).
+# Copy to ~/.config/cloakcode/litellm.config.yaml then fill in your own
+# API keys (each on YOUR account — no key shared between several people,
+# see docs/THREAT-MODEL.md for why).
 #
-# Mécanisme de rotation : plusieurs entrées avec le même model_name forment un pool.
-# LiteLLM en tire une différente à chaque requête selon routing_strategy.
-# Référence : https://docs.litellm.ai/docs/proxy/load_balancing
+# Rotation mechanism: several entries with the same model_name form a pool.
+# LiteLLM picks a different one on each request depending on routing_strategy.
+# Reference: https://docs.litellm.ai/docs/proxy/load_balancing
 
 model_list:
-  # --- Venice AI (api.venice.ai) — API distante directe, compatible OpenAI ---
+  # --- Venice AI (api.venice.ai) — direct remote API, OpenAI-compatible ---
   - model_name: uncensored
     litellm_params:
-      model: openai/zai-org-glm-5-1        # cf. https://docs.venice.ai/models pour la liste à jour
+      model: openai/zai-org-glm-5-1        # see https://docs.venice.ai/models for the current list
       api_base: https://api.venice.ai/api/v1
       api_key: os.environ/VENICE_API_KEY_1
   - model_name: uncensored
@@ -24,17 +24,18 @@ model_list:
       api_base: https://api.venice.ai/api/v1
       api_key: os.environ/VENICE_API_KEY_3
 
-  # --- Tinfoil (tinfoil.sh) — nécessite LEUR proxy d'attestation local ---
-  # Tinfoil vérifie l'attestation de l'enclave via un proxy local (tinfoil-cli)
-  # avant de relayer quoi que ce soit. Pour que ce trafic passe aussi par Tor,
-  # lance ce proxy DANS la même session oniux que celui-ci, avant `cloakcode` :
+  # --- Tinfoil (tinfoil.sh) — requires THEIR local attestation proxy ---
+  # Tinfoil verifies enclave attestation through a local proxy (tinfoil-cli)
+  # before relaying anything. For that traffic to also go through Tor,
+  # start this proxy INSIDE the same oniux session as this one, before
+  # `cloakcode`:
   #   oniux tinfoil-cli proxy --port 3301 &
-  # puis décommente :
+  # then uncomment:
   # - model_name: uncensored
   #   litellm_params:
-  #     model: openai/kimi-k2-6            # cf. https://docs.tinfoil.sh pour la liste à jour
+  #     model: openai/kimi-k2-6            # see https://docs.tinfoil.sh for the current list
   #     api_base: http://127.0.0.1:3301/v1
   #     api_key: os.environ/TINFOIL_API_KEY
 
 router_settings:
-  routing_strategy: simple-shuffle   # une clé du pool tirée au hasard à chaque requête
+  routing_strategy: simple-shuffle   # one key from the pool picked at random per request

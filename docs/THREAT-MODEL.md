@@ -1,54 +1,56 @@
-# Modèle de menace
+# Threat model
 
-Ce document dit honnêtement ce que `cloakcode` protège et ce qu'il ne protège pas.
-Un outil de vie privée qui survend ses garanties est pire qu'inutile — lis ceci avant
-de considérer quoi que ce soit ici comme de l'anonymat "total".
+This document honestly states what `cloakcode` protects and what it does not.
+A privacy tool that oversells its guarantees is worse than useless — read this
+before treating anything here as "total" anonymity.
 
-## Ce que ça protège réellement
+## What it actually protects
 
-- **Ton adresse IP face au provider (Venice, Tinfoil, ...)** : `oniux` isole le proxy
-  LiteLLM au niveau noyau (namespaces Linux) et force tout son trafic sortant à
-  passer par Tor. Le provider ne voit qu'un nœud de sortie Tor, jamais ton IP réelle
-  ni celle de ton FAI.
-- **La persistance d'une clé unique dans le temps** : avec plusieurs clés dans le
-  pool de rotation, aucune requête isolée n'est facilement rattachable à "toujours
-  la même clé" — utile si une clé fuite ou si tu veux limiter le profil
-  comportemental accumulé sur un seul compte.
-- **Les fuites réseau accidentelles** : contrairement à un simple export de variable
-  `HTTPS_PROXY` que certains programmes ignorent, l'isolation par namespace d'oniux
-  est étanche même si le programme wrappé se comporte mal.
+- **Your IP address from the provider (Venice, Tinfoil, ...)**: `oniux` isolates
+  the LiteLLM proxy at the kernel level (Linux namespaces) and forces all its
+  outbound traffic through Tor. The provider only ever sees a Tor exit node,
+  never your real IP or your ISP's.
+- **The persistence of a single key over time**: with several keys in the
+  rotation pool, no single request is easily tied back to "always the same
+  key" — useful if a key leaks, or if you want to limit the behavioral
+  profile that accumulates on one account.
+- **Accidental network leaks**: unlike a simple `HTTPS_PROXY` export that some
+  programs ignore, oniux's namespace isolation is leak-proof even if the
+  wrapped program misbehaves.
 
-## Ce que ça NE protège PAS
+## What it does NOT protect
 
-- **L'identité de ton compte.** Ce projet est auto-hébergé : chaque clé du pool
-  reste TA propre clé, sur TON propre compte. Si ce compte est lié à ton email ou
-  ta carte bancaire (c'est le cas de Tinfoil par défaut), le provider sait que
-  c'est toi qui utilises le service, même s'il ne voit pas ton IP. Confidentialité
-  du contenu (le provider ne peut pas lire tes prompts, garanti par leur TEE) et
-  anonymat de l'identité (le provider ne sait pas qui tu es) sont deux garanties
-  différentes — ce projet ne fournit que la seconde, et seulement au niveau réseau.
-- **La traçabilité du paiement.** Payer Venice en crypto n'est anonyme que si la
-  chaîne d'achat l'est aussi. Un achat KYC sur un exchange puis un envoi direct au
-  wallet Venice reste traçable par analyse blockchain, indépendamment du réseau.
-- **Un ensemble d'anonymat partagé.** La rotation ne mélange PAS ton trafic avec
-  celui d'autres utilisateurs (ça, seul un service mutualisé multi-utilisateurs le
-  ferait — explicitement écarté pour ce projet, voir README). Rotation sur tes
-  propres clés = moins de corrélation dans le temps, pas un groupe anonyme.
-- **Le contenu de tes prompts.** Ton style d'écriture, des détails de projet
-  identifiables, ou simplement ton nom mentionné dans une conversation restent le
-  maillon le plus faible, quel que soit le soin apporté à la couche réseau.
-- **Une garantie absolue côté TEE.** La confidentialité matérielle de Tinfoil
-  repose sur des hypothèses de sécurité (Intel SGX, AMD SEV, ...) qui ont déjà été
-  cassées par le passé via des attaques par canal auxiliaire. Solide, pas infaillible.
-- **Une corrélation de trafic par un adversaire global.** Tor reste théoriquement
-  vulnérable à une analyse de timing par une entité qui observerait à la fois ton
-  point d'entrée et le nœud de sortie — hors de portée d'un acteur privé, pas d'un
-  État disposant d'un accès large aux infrastructures réseau.
+- **Your account identity.** This project is self-hosted: every key in the
+  pool is still YOUR key, on YOUR account. If that account is tied to your
+  email or credit card (Tinfoil's default), the provider knows it's you using
+  the service, even if it never sees your IP. Content confidentiality (the
+  provider can't read your prompts, guaranteed by their TEE) and identity
+  anonymity (the provider doesn't know who you are) are two different
+  guarantees — this project only provides the second, and only at the
+  network level.
+- **Payment traceability.** Paying Venice in crypto is only anonymous if the
+  purchase chain is too. A KYC purchase on an exchange followed by a direct
+  transfer to a Venice wallet remains traceable through blockchain analysis,
+  independent of the network layer.
+- **A shared anonymity set.** Rotation does NOT mix your traffic with other
+  users' (only a multi-user pooled service would do that — explicitly ruled
+  out for this project, see README). Rotating across your own keys reduces
+  correlation over time; it does not create an anonymous crowd.
+- **The content of your prompts.** Your writing style, identifiable project
+  details, or simply your name mentioned in a conversation remain the weakest
+  link, no matter how careful the network layer is.
+- **An absolute TEE guarantee.** Tinfoil's hardware confidentiality rests on
+  security assumptions (Intel SGX, AMD SEV, ...) that have been broken before
+  via side-channel attacks. Solid, not infallible.
+- **Traffic correlation by a global adversary.** Tor remains theoretically
+  vulnerable to timing analysis by an entity that observes both your entry
+  point and the exit node — out of reach for a private actor, not necessarily
+  for a state with broad access to network infrastructure.
 
-## Pour aller plus loin, à toi de gérer
+## Beyond this, it's on you
 
-- Ne réutilise pas une identité déjà connue (email pro, pseudo habituel) pour créer
-  les comptes des clés du pool si tu veux limiter la corrélation.
-- Si l'anonymat du paiement compte pour toi, source ta crypto en dehors d'un chemin
-  direct exchange-KYC → wallet.
-- Reste attentif au contenu de ce que tu écris dans tes prompts.
+- Don't reuse an already-known identity (work email, usual handle) to create
+  the accounts behind the pool's keys if you want to limit correlation.
+- If payment anonymity matters to you, source your crypto outside a direct
+  KYC-exchange-to-wallet path.
+- Stay mindful of what you actually write in your prompts.

@@ -3,35 +3,34 @@
 
 # cloakcode
 
-OpenCode, isolé sous Tor, avec rotation de clés vers des modèles non censurés.
+OpenCode, isolated under Tor, with key rotation to uncensored models.
 
-Niche assumée : devs vie privée/sécu qui veulent découpler leur agent de code de
-leur identité réseau. Auto-hébergé, chacun avec ses propres clés — pas de compte
-partagé, pas d'intermédiaire.
+Deliberately niche: privacy/security-minded devs who want to decouple their
+coding agent usage from their network identity. Self-hosted, everyone with
+their own keys — no shared account, no intermediary.
 
 ```bash
-./bin/cloakcode doctor   # vérifie les dépendances, sans clé API ni réseau
-./bin/cloakcode          # lance OpenCode derrière le tunnel
+./bin/cloakcode doctor   # checks dependencies, no API key or network needed
+./bin/cloakcode          # runs OpenCode behind the tunnel
 ```
 
-## Comment ça marche
+## How it works
 
-[oniux](https://gitlab.torproject.org/tpo/core/oniux) (outil officiel du Tor
-Project, namespaces Linux) isole un proxy LiteLLM dans son propre espace réseau et
-force tout son trafic sortant à passer par Tor — étanche même si le proxy est mal
-configuré, contrairement à un simple `HTTPS_PROXY` que certains programmes
-ignorent. Ce proxy fait tourner plusieurs de tes clés API (Venice, Tinfoil) dans un
-même pool : `routing_strategy: simple-shuffle` en tire une différente à chaque
-requête, pour limiter la persistance d'un profil sur un seul compte. OpenCode ne
-parle qu'à ce proxy, en loopback — c'est la seule pièce que tu utilises
-directement.
+[oniux](https://gitlab.torproject.org/tpo/core/oniux) (official Tor Project
+tool, Linux namespaces) isolates a LiteLLM proxy in its own network space and
+forces all its outbound traffic through Tor — leak-proof even if the proxy is
+misconfigured, unlike a simple `HTTPS_PROXY` that some programs ignore. This
+proxy runs several of your API keys (Venice, Tinfoil) in the same pool:
+`routing_strategy: simple-shuffle` picks a different one on each request,
+limiting the profile persistence on a single account. OpenCode only talks to
+this proxy, over loopback — it's the only piece you use directly.
 
 ```
-OpenCode → 127.0.0.1 (LiteLLM, pool de clés) → oniux (Tor) → Venice / Tinfoil
+OpenCode → 127.0.0.1 (LiteLLM, key pool) → oniux (Tor) → Venice / Tinfoil
 ```
 
-Le circuit Tor se construit une fois au lancement de `cloakcode`, pas à chaque
-message — le coût est au démarrage, pas dans la conversation.
+The Tor circuit is built once at `cloakcode`'s startup, not on every message —
+the cost is at launch, not in the conversation.
 
 ## Installation
 
@@ -49,48 +48,48 @@ cp config/litellm.config.example.yaml ~/.config/cloakcode/litellm.config.yaml
 cp config/opencode.json.example ./opencode.json
 ```
 
-Renseigne tes propres clés (Venice, Tinfoil) dans `litellm.config.yaml`. Le format
-provider custom d'OpenCode change vite — vérifié contre
-[opencode.ai/docs](https://opencode.ai/docs) au moment de l'écriture, à
-recontrôler si `opencode.json.example` ne marche plus.
+Fill in your own keys (Venice, Tinfoil) in `litellm.config.yaml`. OpenCode's
+custom provider format changes fast — verified against
+[opencode.ai/docs](https://opencode.ai/docs) at the time of writing, worth
+rechecking if `opencode.json.example` stops working.
 
 ### Tor-over-VPN
 
-Connecte ton VPN avant de lancer `cloakcode` — oniux route par-dessus la route par
-défaut existante, aucun réglage supplémentaire à faire.
+Connect your VPN before launching `cloakcode` — oniux routes on top of the
+existing default route, no extra setup needed.
 
-## Variables d'environnement
+## Environment variables
 
-| Variable | Défaut | Effet |
+| Variable | Default | Effect |
 |---|---|---|
-| `CLOAKCODE_NETWORK` | `tor` | `tor` ou `none` (aucune isolation, déconseillé) |
-| `CLOAKCODE_REQUIRE_VPN` | `0` | `1` = échoue si aucune interface VPN n'est active |
-| `CLOAKCODE_PROXY_PORT` | `4000` | Port local du proxy LiteLLM |
-| `CLOAKCODE_CONFIG_DIR` | `~/.config/cloakcode` | Dossier de config |
-| `CLOAKCODE_LITELLM_CONFIG` | `$CLOAKCODE_CONFIG_DIR/litellm.config.yaml` | Config LiteLLM |
-| `CLOAKCODE_LOG_FILE` | `/tmp/cloakcode-litellm.log` | Log du proxy |
+| `CLOAKCODE_NETWORK` | `tor` | `tor` or `none` (no isolation, not recommended) |
+| `CLOAKCODE_REQUIRE_VPN` | `0` | `1` = fail if no VPN interface is active |
+| `CLOAKCODE_PROXY_PORT` | `4000` | Local port of the LiteLLM proxy |
+| `CLOAKCODE_CONFIG_DIR` | `~/.config/cloakcode` | Config directory |
+| `CLOAKCODE_LITELLM_CONFIG` | `$CLOAKCODE_CONFIG_DIR/litellm.config.yaml` | LiteLLM config path |
+| `CLOAKCODE_LOG_FILE` | `/tmp/cloakcode-litellm.log` | Proxy log file |
 
-## Limites
+## Limits
 
-[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — ce que ça cache (ton IP réseau) et
-ce que ça ne cache pas (ton compte, ton paiement, le contenu de tes prompts). À
-lire avant de faire confiance à l'outil pour autre chose que ce qu'il fait
-réellement.
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — what this hides (your network
+IP) and what it doesn't (your account, your payment, the content of your
+prompts). Read it before trusting this tool for anything beyond what it
+actually does.
 
-## Pourquoi pas un service hébergé
+## Why not a hosted service
 
-Un pool de clés mutualisé entre plusieurs utilisateurs anonymiserait mieux, mais
-les CGU de Venice (responsable des "End Users" d'un produit tiers) et de Tinfoil
-(pas de partage de clé/compte) rendent ça risqué. Auto-hébergé l'évite : chacun
-reste client direct du provider, sous ses propres CGU.
+A key pool shared across multiple users would anonymize better, but Venice's
+terms (responsible for a third-party product's "End Users") and Tinfoil's (no
+key/account sharing) make that risky. Self-hosting avoids it entirely:
+everyone stays a direct customer of the provider, under their own terms.
 
-## Contribuer
+## Contributing
 
-Voir [CONTRIBUTING.md](CONTRIBUTING.md) — pas de CLA. Idées en discussion mais pas
-codées : fallback intelligent entre un modèle standard et un modèle uncensored sur
-détection de refus, pool multi-provider au-delà de Venice/Tinfoil. Ouvre une issue
-avant d'y toucher.
+See [CONTRIBUTING.md](CONTRIBUTING.md) — no CLA. Ideas under discussion but
+not built: smart fallback between a standard and an uncensored model on
+refusal detection, multi-provider pooling beyond Venice/Tinfoil. Open an
+issue before touching either.
 
-## Licence
+## License
 
 [AGPL-3.0](LICENSE).

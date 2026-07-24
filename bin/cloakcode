@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# cloakcode — lance OpenCode contre un proxy LiteLLM à rotation de clés,
-# ce proxy étant lui-même isolé au niveau réseau (Tor via oniux).
+# cloakcode — runs OpenCode against a LiteLLM proxy with key rotation,
+# that proxy itself being network-isolated (Tor via oniux).
 #
-# Architecture :
-#   oniux(litellm proxy) --Tor--> Venice / Tinfoil / autre provider
-#   opencode --loopback local--> litellm proxy (127.0.0.1)
+# Architecture:
+#   oniux(litellm proxy) --Tor--> Venice / Tinfoil / other provider
+#   opencode --local loopback--> litellm proxy (127.0.0.1)
 #
-# Voir docs/THREAT-MODEL.md avant de considérer quoi que ce soit ici comme
-# "anonymat total" — ce script isole le réseau, il ne règle pas à lui seul
-# l'identité du compte, le paiement, ou le contenu de tes prompts.
+# See docs/THREAT-MODEL.md before treating anything here as "total
+# anonymity" — this script isolates the network, it does not by itself
+# handle account identity, payment, or the content of your prompts.
 set -euo pipefail
 
 CONFIG_DIR="${CLOAKCODE_CONFIG_DIR:-$HOME/.config/cloakcode}"
 LITELLM_CONFIG="${CLOAKCODE_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
 PROXY_PORT="${CLOAKCODE_PROXY_PORT:-4000}"
 NETWORK_MODE="${CLOAKCODE_NETWORK:-tor}"   # tor | none
-REQUIRE_VPN="${CLOAKCODE_REQUIRE_VPN:-0}"  # 1 = échoue si aucune interface VPN détectée
+REQUIRE_VPN="${CLOAKCODE_REQUIRE_VPN:-0}"  # 1 = fail if no VPN interface is detected
 LOG_FILE="${CLOAKCODE_LOG_FILE:-/tmp/cloakcode-litellm.log}"
 
 VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
@@ -23,40 +23,40 @@ VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
 die() { echo "cloakcode: $*" >&2; exit 1; }
 
 # --- cloakcode doctor / --check -----------------------------------------
-# Vérifie les dépendances sans avoir besoin de clés API ni de réseau.
+# Checks dependencies without needing API keys or network access.
 doctor_check_bin() {
   local name="$1" hint="$2"
   if command -v "$name" >/dev/null 2>&1; then
     echo "  ✓ $name  ($(command -v "$name"))"
     return 0
   fi
-  echo "  ✗ $name introuvable — $hint"
+  echo "  ✗ $name not found — $hint"
   return 1
 }
 
 doctor() {
   local failed=0
 
-  echo "cloakcode doctor — vérification des dépendances (aucune clé API requise)"
+  echo "cloakcode doctor — checking dependencies (no API key required)"
   echo
-  doctor_check_bin oniux    "voir README > Installation (cargo install --git ... oniux)" || failed=1
+  doctor_check_bin oniux    "see README > Installation (cargo install --git ... oniux)" || failed=1
   doctor_check_bin litellm  "pip install 'litellm[proxy]'" || failed=1
   doctor_check_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
 
   echo
   if [ -f "$LITELLM_CONFIG" ]; then
-    echo "  ✓ config LiteLLM trouvée : $LITELLM_CONFIG"
+    echo "  ✓ LiteLLM config found: $LITELLM_CONFIG"
   else
-    echo "  ✗ config LiteLLM absente : $LITELLM_CONFIG"
-    echo "    → cp config/litellm.config.example.yaml $LITELLM_CONFIG, puis renseigne tes clés."
+    echo "  ✗ LiteLLM config missing: $LITELLM_CONFIG"
+    echo "    → cp config/litellm.config.example.yaml $LITELLM_CONFIG, then fill in your keys."
     failed=1
   fi
 
   echo
   if [ "$failed" = 0 ]; then
-    echo "cloakcode: tout est prêt."
+    echo "cloakcode: everything is ready."
   else
-    echo "cloakcode: au moins une dépendance manque — corrige les ✗ ci-dessus avant de lancer cloakcode." >&2
+    echo "cloakcode: at least one dependency is missing — fix the ✗ above before running cloakcode." >&2
   fi
   return "$failed"
 }
@@ -68,13 +68,13 @@ case "${1:-}" in
     ;;
 esac
 
-[ -f "$LITELLM_CONFIG" ] || die "config introuvable : $LITELLM_CONFIG
-  → copie config/litellm.config.example.yaml vers cet emplacement et renseigne tes clés."
+[ -f "$LITELLM_CONFIG" ] || die "config not found: $LITELLM_CONFIG
+  → copy config/litellm.config.example.yaml to that location and fill in your keys."
 
 if [ "$REQUIRE_VPN" = "1" ]; then
   ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -Eq "$VPN_IFACE_PATTERN" \
-    || die "CLOAKCODE_REQUIRE_VPN=1 mais aucune interface VPN reconnue n'est active (motif recherché : $VPN_IFACE_PATTERN).
-  Connecte ton VPN d'abord si tu veux du Tor-over-VPN — oniux route ensuite par-dessus la route par défaut existante."
+    || die "CLOAKCODE_REQUIRE_VPN=1 but no recognized VPN interface is active (pattern: $VPN_IFACE_PATTERN).
+  Connect your VPN first if you want Tor-over-VPN — oniux then routes on top of the existing default route."
 fi
 
 PROXY_PID=""
@@ -87,29 +87,29 @@ trap cleanup EXIT INT TERM
 
 case "$NETWORK_MODE" in
   tor)
-    command -v oniux >/dev/null 2>&1 || die "oniux introuvable — voir README (installation)."
+    command -v oniux >/dev/null 2>&1 || die "oniux not found — see README (installation)."
     oniux litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
     PROXY_PID=$!
     ;;
   none)
-    echo "cloakcode: ATTENTION — mode 'none', aucune isolation réseau active." >&2
+    echo "cloakcode: WARNING — 'none' mode, no network isolation active." >&2
     litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
     PROXY_PID=$!
     ;;
   *)
-    die "CLOAKCODE_NETWORK invalide : '$NETWORK_MODE' (valeurs acceptées : tor, none)"
+    die "invalid CLOAKCODE_NETWORK: '$NETWORK_MODE' (accepted values: tor, none)"
     ;;
 esac
 
-echo "cloakcode: démarrage du proxy (réseau: $NETWORK_MODE, port $PROXY_PORT)..." >&2
+echo "cloakcode: starting proxy (network: $NETWORK_MODE, port $PROXY_PORT)..." >&2
 for _ in $(seq 1 40); do
   curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 && break
   sleep 0.5
 done
 curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 \
-  || die "le proxy LiteLLM n'a pas démarré à temps — voir $LOG_FILE"
+  || die "LiteLLM proxy did not start in time — see $LOG_FILE"
 
-echo "cloakcode: proxy prêt sur 127.0.0.1:${PROXY_PORT}, lancement d'OpenCode." >&2
+echo "cloakcode: proxy ready on 127.0.0.1:${PROXY_PORT}, launching OpenCode." >&2
 
-command -v opencode >/dev/null 2>&1 || die "opencode introuvable — voir README (installation)."
+command -v opencode >/dev/null 2>&1 || die "opencode not found — see README (installation)."
 exec opencode "$@"
