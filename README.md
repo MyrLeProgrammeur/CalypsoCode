@@ -3,85 +3,41 @@
 
 # cloakcode
 
-**Ton IP ne quitte jamais ta machine. Le provider ne voit qu'un nœud de sortie Tor.**
+OpenCode, isolé sous Tor, avec rotation de clés vers des modèles non censurés.
 
-Un agent de codage type Claude Code (via [OpenCode](https://opencode.ai)), dont le
-trafic vers l'IA passe par Tor et utilise des modèles non censurés
-([Venice](https://venice.ai), [Tinfoil](https://tinfoil.sh)), avec rotation
-automatique de clés API.
-
-Pas un produit grand public — un outil pour devs orientés vie privée/sécu qui
-veulent découpler leur usage d'un agent de code de leur identité réseau. Si tu
-cherches un outil simple d'accès pour le grand public, ce n'est pas celui-ci.
-
-**Auto-hébergé.** Chacun installe et fait tourner sa propre instance, avec ses
-propres clés API. Aucun compte partagé, aucun intermédiaire, aucune revente d'accès
-— voir [pourquoi](#pourquoi-auto-hébergé) plus bas.
-
-> [!IMPORTANT]
-> **Lis [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) avant de considérer quoi que
-> ce soit ici comme de l'anonymat "total".** Ce projet isole ton trafic réseau ; il
-> ne règle pas à lui seul l'identité de ton compte, ton moyen de paiement, ou le
-> contenu de tes prompts. Un outil de vie privée qui survend ses garanties est pire
-> qu'inutile.
-
-## Architecture
-
-```
-                    ┌────────────────────────────────┐
-                    │   oniux (isolation réseau)      │
-                    │  ┌────────────────────────────┐│
-                    │  │  proxy LiteLLM (pool clés)  ││──Tor──▶ Venice / Tinfoil
-                    │  └────────────────────────────┘│
-                    └────────────────▲───────────────┘
-                                      │ loopback (127.0.0.1)
-                              ┌───────┴───────┐
-                              │    OpenCode    │
-                              └────────────────┘
-```
-
-- **[oniux](https://gitlab.torproject.org/tpo/core/oniux)** (outil officiel du Tor
-  Project) isole le proxy au niveau noyau (namespaces Linux) et force son trafic
-  sortant à passer par Tor. Aucune fuite possible même si le proxy est mal configuré
-  — contrairement à un simple `HTTPS_PROXY` que certains programmes ignorent.
-- **[LiteLLM](https://docs.litellm.ai/docs/proxy/load_balancing)** fait tourner
-  plusieurs de tes clés API dans un même pool (`routing_strategy: simple-shuffle`)
-  — une clé différente à chaque requête, pour limiter la persistance d'un profil
-  sur un seul compte.
-- **[OpenCode](https://opencode.ai)** ne parle qu'au proxy local, en loopback —
-  c'est la seule pièce que tu utilises directement, cloakcode ne remplace rien
-  côté agent de codage.
-
-## Quickstart
+Niche assumée : devs vie privée/sécu qui veulent découpler leur agent de code de
+leur identité réseau. Auto-hébergé, chacun avec ses propres clés — pas de compte
+partagé, pas d'intermédiaire.
 
 ```bash
-# 1. Dépendances
-cargo install --git https://gitlab.torproject.org/tpo/core/oniux oniux
-pip install 'litellm[proxy]'
-curl -fsSL https://opencode.ai/install | bash
-
-# 2. Config — renseigne tes propres clés API dans le fichier copié
-mkdir -p ~/.config/cloakcode
-cp config/litellm.config.example.yaml ~/.config/cloakcode/litellm.config.yaml
-cp config/opencode.json.example ./opencode.json   # à la racine de ton projet
-
-# 3. Vérifie que tout est en place (aucune clé requise pour cette étape)
-./bin/cloakcode doctor
-
-# 4. Lance
-./bin/cloakcode
+./bin/cloakcode doctor   # vérifie les dépendances, sans clé API ni réseau
+./bin/cloakcode          # lance OpenCode derrière le tunnel
 ```
+
+## Comment ça marche
+
+[oniux](https://gitlab.torproject.org/tpo/core/oniux) (outil officiel du Tor
+Project, namespaces Linux) isole un proxy LiteLLM dans son propre espace réseau et
+force tout son trafic sortant à passer par Tor — étanche même si le proxy est mal
+configuré, contrairement à un simple `HTTPS_PROXY` que certains programmes
+ignorent. Ce proxy fait tourner plusieurs de tes clés API (Venice, Tinfoil) dans un
+même pool : `routing_strategy: simple-shuffle` en tire une différente à chaque
+requête, pour limiter la persistance d'un profil sur un seul compte. OpenCode ne
+parle qu'à ce proxy, en loopback — c'est la seule pièce que tu utilises
+directement.
+
+```
+OpenCode → 127.0.0.1 (LiteLLM, pool de clés) → oniux (Tor) → Venice / Tinfoil
+```
+
+Le circuit Tor se construit une fois au lancement de `cloakcode`, pas à chaque
+message — le coût est au démarrage, pas dans la conversation.
 
 ## Installation
 
 ```bash
-# oniux (Rust, cf. https://gitlab.torproject.org/tpo/core/oniux)
 cargo install --git https://gitlab.torproject.org/tpo/core/oniux oniux
-
-# LiteLLM (proxy)
 pip install 'litellm[proxy]'
-
-# OpenCode
 curl -fsSL https://opencode.ai/install | bash
 ```
 
@@ -90,78 +46,50 @@ curl -fsSL https://opencode.ai/install | bash
 ```bash
 mkdir -p ~/.config/cloakcode
 cp config/litellm.config.example.yaml ~/.config/cloakcode/litellm.config.yaml
-# renseigne tes propres clés API (Venice, Tinfoil...) dans ce fichier ou en variables d'env
+cp config/opencode.json.example ./opencode.json
 ```
 
-Copie aussi `config/opencode.json.example` vers `opencode.json` à la racine de ton
-projet (ou l'emplacement attendu par ta version d'OpenCode — vérifie la
-[doc officielle](https://opencode.ai/docs) si ça a bougé, le format des providers
-custom évolue vite ; structure vérifiée contre la doc `provider` d'OpenCode au
-moment de l'écriture de ce README).
-
-## Diagnostic
-
-```bash
-./bin/cloakcode doctor     # ou : ./bin/cloakcode --check
-```
-
-Vérifie la présence d'`oniux`, `litellm`, `opencode`, et l'existence du fichier de
-config LiteLLM — sans avoir besoin de clés API ni de réseau. Un `✗` par élément
-manquant, avec l'action pour le corriger. Sortie non nulle si quelque chose manque
-— utile en script ou avant d'ouvrir une issue.
-
-## Utilisation
-
-```bash
-./bin/cloakcode
-```
-
-Variables d'environnement utiles :
-
-| Variable | Défaut | Effet |
-|---|---|---|
-| `CLOAKCODE_NETWORK` | `tor` | `tor` (isolation oniux) ou `none` (aucune isolation — déconseillé) |
-| `CLOAKCODE_REQUIRE_VPN` | `0` | `1` = échoue si aucune interface VPN active n'est détectée |
-| `CLOAKCODE_PROXY_PORT` | `4000` | Port local du proxy LiteLLM |
-| `CLOAKCODE_CONFIG_DIR` | `~/.config/cloakcode` | Dossier de config cloakcode |
-| `CLOAKCODE_LITELLM_CONFIG` | `$CLOAKCODE_CONFIG_DIR/litellm.config.yaml` | Chemin du fichier de config LiteLLM |
-| `CLOAKCODE_LOG_FILE` | `/tmp/cloakcode-litellm.log` | Fichier de log du proxy LiteLLM |
+Renseigne tes propres clés (Venice, Tinfoil) dans `litellm.config.yaml`. Le format
+provider custom d'OpenCode change vite — vérifié contre
+[opencode.ai/docs](https://opencode.ai/docs) au moment de l'écriture, à
+recontrôler si `opencode.json.example` ne marche plus.
 
 ### Tor-over-VPN
 
-Aucun code spécifique n'est nécessaire : connecte ton VPN au niveau système avant de
-lancer `cloakcode`. oniux route par-dessus la route par défaut existante, donc si ton
-VPN est déjà actif, son trafic Tor passe naturellement à travers.
+Connecte ton VPN avant de lancer `cloakcode` — oniux route par-dessus la route par
+défaut existante, aucun réglage supplémentaire à faire.
 
-## Pourquoi auto-hébergé
+## Variables d'environnement
 
-Un service hébergé façon OpenRouter (pool de clés mutualisé entre plusieurs
-utilisateurs) donnerait un vrai gain d'anonymat par mutualisation — mais Venice
-impose que l'opérateur d'un produit tiers reste responsable des actions de ses
-utilisateurs finaux, et Tinfoil interdit explicitement le partage de clés/comptes.
-Combiné à une conception qui anonymise volontairement l'origine des requêtes, ces
-deux contraintes sont difficiles à concilier. Le modèle auto-hébergé les évite
-entièrement : chacun reste directement client du provider, sous ses propres CGU.
+| Variable | Défaut | Effet |
+|---|---|---|
+| `CLOAKCODE_NETWORK` | `tor` | `tor` ou `none` (aucune isolation, déconseillé) |
+| `CLOAKCODE_REQUIRE_VPN` | `0` | `1` = échoue si aucune interface VPN n'est active |
+| `CLOAKCODE_PROXY_PORT` | `4000` | Port local du proxy LiteLLM |
+| `CLOAKCODE_CONFIG_DIR` | `~/.config/cloakcode` | Dossier de config |
+| `CLOAKCODE_LITELLM_CONFIG` | `$CLOAKCODE_CONFIG_DIR/litellm.config.yaml` | Config LiteLLM |
+| `CLOAKCODE_LOG_FILE` | `/tmp/cloakcode-litellm.log` | Log du proxy |
 
-## Roadmap
+## Limites
 
-Rien ci-dessous n'est implémenté — ce sont des pistes, pas des engagements.
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) — ce que ça cache (ton IP réseau) et
+ce que ça ne cache pas (ton compte, ton paiement, le contenu de tes prompts). À
+lire avant de faire confiance à l'outil pour autre chose que ce qu'il fait
+réellement.
 
-- **Fallback/routing intelligent entre modèles** : basculer automatiquement d'un
-  modèle "standard" vers un modèle "uncensored" sur détection de refus. Écarté
-  pour l'instant volontairement — le pool actuel reste une rotation uniforme
-  simple, sans logique de bascule. Pourrait avoir du sens plus tard, mais ajoute
-  de la complexité et des questions de confiance (qui décide qu'une réponse est
-  un refus ?) qui méritent leur propre discussion avant du code.
-- **Pool mixte multi-providers dans une même session** : au-delà de Venice et
-  Tinfoil, faire tourner d'autres providers compatibles OpenAI dans le même pool
-  de rotation.
-- Contributions et idées bienvenues sur ces sujets via une issue — voir
-  [CONTRIBUTING.md](CONTRIBUTING.md).
+## Pourquoi pas un service hébergé
+
+Un pool de clés mutualisé entre plusieurs utilisateurs anonymiserait mieux, mais
+les CGU de Venice (responsable des "End Users" d'un produit tiers) et de Tinfoil
+(pas de partage de clé/compte) rendent ça risqué. Auto-hébergé l'évite : chacun
+reste client direct du provider, sous ses propres CGU.
 
 ## Contribuer
 
-Voir [CONTRIBUTING.md](CONTRIBUTING.md). Pas de CLA, AGPL-3.0 simple.
+Voir [CONTRIBUTING.md](CONTRIBUTING.md) — pas de CLA. Idées en discussion mais pas
+codées : fallback intelligent entre un modèle standard et un modèle uncensored sur
+détection de refus, pool multi-provider au-delà de Venice/Tinfoil. Ouvre une issue
+avant d'y toucher.
 
 ## Licence
 
