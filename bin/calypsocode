@@ -260,6 +260,8 @@ startup_check() {
   esac
 }
 
+# Invoked from the EXIT, INT and TERM traps, which shellcheck cannot see.
+# shellcheck disable=SC2329
 receipt_write() {
   local status=$?
   [ "$SESSION_STARTED" = "1" ] || return "$status"
@@ -579,9 +581,11 @@ INNER_EOF
 SESSION_START_EPOCH="$(date -u +%s)"
 SESSION_START_STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SESSION_STARTED=1
-# Ctrl-C is how an agent session normally ends, and bash does not run an EXIT
-# trap for an untrapped SIGINT — so the receipt would be lost exactly when it
-# is most expected. Trap the signals too; RECEIPT_DONE keeps it to one.
+# Ctrl-C is how an agent session normally ends. Bash does run the EXIT trap on
+# an untrapped SIGINT (measured on 5.3), so the receipt survives either way —
+# what these traps buy is the exit status. Without them a signalled launcher
+# can exit 0, reporting success for a session the user interrupted.
+# RECEIPT_DONE stops the signal path and the EXIT path both writing one.
 trap receipt_write EXIT
 trap 'receipt_write; exit 130' INT
 trap 'receipt_write; exit 143' TERM
