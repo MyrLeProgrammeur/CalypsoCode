@@ -1,0 +1,4 @@
+*.log
+.env
+config/litellm.config.yaml
+config/opencode.json

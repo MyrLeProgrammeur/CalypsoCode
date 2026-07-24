@@ -1,0 +1,40 @@
+# Copier vers ~/.config/cloakcode/litellm.config.yaml puis renseigner tes propres
+# clés d'API (chacune sur TON compte — pas de clé partagée entre plusieurs personnes,
+# voir docs/THREAT-MODEL.md sur pourquoi).
+#
+# Mécanisme de rotation : plusieurs entrées avec le même model_name forment un pool.
+# LiteLLM en tire une différente à chaque requête selon routing_strategy.
+# Référence : https://docs.litellm.ai/docs/proxy/load_balancing
+
+model_list:
+  # --- Venice AI (api.venice.ai) — API distante directe, compatible OpenAI ---
+  - model_name: uncensored
+    litellm_params:
+      model: openai/zai-org-glm-5-1        # cf. https://docs.venice.ai/models pour la liste à jour
+      api_base: https://api.venice.ai/api/v1
+      api_key: os.environ/VENICE_API_KEY_1
+  - model_name: uncensored
+    litellm_params:
+      model: openai/zai-org-glm-5-1
+      api_base: https://api.venice.ai/api/v1
+      api_key: os.environ/VENICE_API_KEY_2
+  - model_name: uncensored
+    litellm_params:
+      model: openai/zai-org-glm-5-1
+      api_base: https://api.venice.ai/api/v1
+      api_key: os.environ/VENICE_API_KEY_3
+
+  # --- Tinfoil (tinfoil.sh) — nécessite LEUR proxy d'attestation local ---
+  # Tinfoil vérifie l'attestation de l'enclave via un proxy local (tinfoil-cli)
+  # avant de relayer quoi que ce soit. Pour que ce trafic passe aussi par Tor,
+  # lance ce proxy DANS la même session oniux que celui-ci, avant `cloakcode` :
+  #   oniux tinfoil-cli proxy --port 3301 &
+  # puis décommente :
+  # - model_name: uncensored
+  #   litellm_params:
+  #     model: openai/kimi-k2-6            # cf. https://docs.tinfoil.sh pour la liste à jour
+  #     api_base: http://127.0.0.1:3301/v1
+  #     api_key: os.environ/TINFOIL_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle   # une clé du pool tirée au hasard à chaque requête

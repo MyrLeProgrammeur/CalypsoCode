@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# cloakcode — lance OpenCode contre un proxy LiteLLM à rotation de clés,
+# ce proxy étant lui-même isolé au niveau réseau (Tor via oniux).
+#
+# Architecture :
+#   oniux(litellm proxy) --Tor--> Venice / Tinfoil / autre provider
+#   opencode --loopback local--> litellm proxy (127.0.0.1)
+#
+# Voir docs/THREAT-MODEL.md avant de considérer quoi que ce soit ici comme
+# "anonymat total" — ce script isole le réseau, il ne règle pas à lui seul
+# l'identité du compte, le paiement, ou le contenu de tes prompts.
+set -euo pipefail
+
+CONFIG_DIR="${CLOAKCODE_CONFIG_DIR:-$HOME/.config/cloakcode}"
+LITELLM_CONFIG="${CLOAKCODE_LITELLM_CONFIG:-$CONFIG_DIR/litellm.config.yaml}"
+PROXY_PORT="${CLOAKCODE_PROXY_PORT:-4000}"
+NETWORK_MODE="${CLOAKCODE_NETWORK:-tor}"   # tor | none
+REQUIRE_VPN="${CLOAKCODE_REQUIRE_VPN:-0}"  # 1 = échoue si aucune interface VPN détectée
+LOG_FILE="${CLOAKCODE_LOG_FILE:-/tmp/cloakcode-litellm.log}"
+
+VPN_IFACE_PATTERN='^(proton|wg|tun|nordlynx|mullvad|ipsec)'
+
+die() { echo "cloakcode: $*" >&2; exit 1; }
+
+[ -f "$LITELLM_CONFIG" ] || die "config introuvable : $LITELLM_CONFIG
+  → copie config/litellm.config.example.yaml vers cet emplacement et renseigne tes clés."
+
+if [ "$REQUIRE_VPN" = "1" ]; then
+  ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -Eq "$VPN_IFACE_PATTERN" \
+    || die "CLOAKCODE_REQUIRE_VPN=1 mais aucune interface VPN reconnue n'est active (motif recherché : $VPN_IFACE_PATTERN).
+  Connecte ton VPN d'abord si tu veux du Tor-over-VPN — oniux route ensuite par-dessus la route par défaut existante."
+fi
+
+PROXY_PID=""
+cleanup() { [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
+case "$NETWORK_MODE" in
+  tor)
+    command -v oniux >/dev/null 2>&1 || die "oniux introuvable — voir README (installation)."
+    oniux litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
+    PROXY_PID=$!
+    ;;
+  none)
+    echo "cloakcode: ATTENTION — mode 'none', aucune isolation réseau active." >&2
+    litellm --config "$LITELLM_CONFIG" --port "$PROXY_PORT" >"$LOG_FILE" 2>&1 &
+    PROXY_PID=$!
+    ;;
+  *)
+    die "CLOAKCODE_NETWORK invalide : '$NETWORK_MODE' (valeurs acceptées : tor, none)"
+    ;;
+esac
+
+echo "cloakcode: démarrage du proxy (réseau: $NETWORK_MODE, port $PROXY_PORT)..." >&2
+for _ in $(seq 1 40); do
+  curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+curl -sf "http://127.0.0.1:${PROXY_PORT}/health/liveliness" >/dev/null 2>&1 \
+  || die "le proxy LiteLLM n'a pas démarré à temps — voir $LOG_FILE"
+
+echo "cloakcode: proxy prêt sur 127.0.0.1:${PROXY_PORT}, lancement d'OpenCode." >&2
+
+command -v opencode >/dev/null 2>&1 || die "opencode introuvable — voir README (installation)."
+exec opencode "$@"
