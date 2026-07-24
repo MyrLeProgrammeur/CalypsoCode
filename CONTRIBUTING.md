@@ -3,11 +3,10 @@
 Thanks for the interest. This project is small and deliberately simple —
 contributions are welcome, but let's keep that spirit.
 
-> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The project is mid-
-> redesign: `bin/calypsocode` does not run, and the architecture it implements
-> was disproven by testing ([docs/FINDINGS.md](docs/FINDINGS.md)). PRs that
-> extend the current script will be declined — it is to be rewritten around
-> the profile model in [docs/DESIGN.md](docs/DESIGN.md), not patched.
+> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The launcher runs, but the
+> premise behind it is unmeasured: no real coding session has gone through it
+> yet ([the gate](docs/ROADMAP.md#gate)). Anything that assumes Tor is usable
+> for agentic work is assuming what this project has not yet shown.
 
 ## No CLA
 
@@ -45,11 +44,14 @@ yamllint config/*.yaml
 python3 -m json.tool config/opencode.json.example > /dev/null
 ```
 
-CI (`.github/workflows/ci.yml`) runs these same checks on every PR. Note that
-`./bin/calypsocode doctor` currently passes while the tool itself cannot run —
-a green check is not evidence the stack works. Fixing that (a `doctor` that
-proves properties instead of asserting them) is
-[roadmap item 3](docs/ROADMAP.md#build-order).
+If `shellcheck` is not installed, `bash -n bin/calypsocode` catches syntax
+errors but nothing else — CI (`.github/workflows/ci.yml`) runs the real
+linters on every PR, so a green local check is not a green CI.
+
+`./bin/calypsocode doctor` reports what it checked and what it could not; it
+does not claim the stack works. Keep it that way. A `doctor` that concludes
+"everything is ready" because three binaries exist is what the first version
+did, and it was wrong the entire time the tool could not run at all.
 
 ## Style
 

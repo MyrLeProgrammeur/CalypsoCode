@@ -8,17 +8,19 @@ Context: [FINDINGS.md](FINDINGS.md) for verified behaviour,
 
 ## Current status
 
-**`bin/calypsocode` does not work.** It implements the pre-testing
-architecture, which
-[F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
-proved is not implementable: a host-side OpenCode cannot reach a LiteLLM proxy
-bound inside the oniux namespace. In `tor` mode the script always exhausts its
-health-check loop and dies with `LiteLLM proxy did not start in time`, and
-[F6](FINDINGS.md#f6--oniux-uses-a-private-tmp-by-default) means the log it
-points at does not exist on the host.
+**`bin/calypsocode` was rewritten around the profile model.** It loads a
+compartment profile, sets identity by environment, launches the agent inside a
+single `oniux` namespace, verifies from inside that the egress is Tor before
+anything is sent, and writes a receipt to `~/.local/state/calypsocode/`.
 
-This is a design defect, not an unfinished implementation. It is fixed by
-rewriting around the profile model, not by adding code to the current script.
+Steps 1–4 of the build order below are implemented. LiteLLM, the host-side
+health-check loop, and the loopback hop are gone rather than patched — they
+were the v0 defect that
+[F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
+proved unimplementable.
+
+**What is not done is the gate.** No real coding session has ever run through
+this. Everything below the network layer is still assumption.
 
 ## <a name="gate"></a>The gate
 

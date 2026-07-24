@@ -20,6 +20,17 @@ STATE_DIR="${CALYPSO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/calypsocod
 PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
 PROFILE_REQUIRED=(NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
 
+# Filled by profile_load via `printf -v`, one per key above. Declared here so
+# their origin is visible at the top of the file rather than only inside the
+# parser.
+P_PROFILE=""
+P_NETWORK=""
+P_API_KEY_ENV=""
+P_API_BASE=""
+P_MODEL=""
+P_GIT_NAME=""
+P_GIT_EMAIL=""
+
 PROFILE_FILE=""
 COMPARTMENT_DIR=""
 OPENCODE_CONFIG_FILE=""

@@ -6,12 +6,13 @@ CalypsoCode removes a defined set of identifiers — network address, git
 identity, environment metadata, agent config — from what your coding agent
 transmits, and reports per session what it removed and what it did not.
 
-> **Status: redesign in progress. `bin/calypsocode` does not currently run.**
-> The original architecture was proven unimplementable by testing (see
-> [docs/FINDINGS.md](docs/FINDINGS.md)). The replacement design is in
-> [docs/DESIGN.md](docs/DESIGN.md); build order in
-> [docs/ROADMAP.md](docs/ROADMAP.md). Do not treat this repo as a working
-> privacy tool yet.
+> **Status: the launcher runs. The premise is not yet measured.** It loads a
+> compartment, launches the agent inside one `oniux` namespace, verifies from
+> inside that the egress really is Tor before anything is sent, and writes a
+> receipt. What has never happened is a real coding session against a real
+> provider: whether authenticated inference survives Tor, and whether the
+> latency is usable at all, are both open ([the gate](docs/ROADMAP.md#gate)).
+> Until that is answered, don't rely on this for anything that matters.
 
 ## The idea
 
