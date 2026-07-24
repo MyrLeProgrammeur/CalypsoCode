@@ -36,6 +36,9 @@ usage:
 options:
   --profile NAME   compartment to launch (default: default). Resolved to
                    ~/.config/calypsocode/profiles/NAME.env
+  --no-verify      skip the egress check. It costs a few seconds over Tor;
+                   skipping it means the session runs with no evidence that
+                   its traffic left via Tor, and the receipt says so.
 
 commands:
   profile          print the resolved profile and exit
@@ -230,6 +233,7 @@ doctor() {
 
 PROFILE_NAME="default"
 COMMAND=""
+VERIFY=1
 AGENT_ARGS=()
 
 case "${1:-}" in
@@ -252,6 +256,10 @@ while [ $# -gt 0 ]; do
       ;;
     --profile=*)
       PROFILE_NAME="${1#--profile=}"
+      shift
+      ;;
+    --no-verify)
+      VERIFY=0
       shift
       ;;
     -h | --help)
@@ -319,11 +327,64 @@ export OPENCODE_CONFIG="$OPENCODE_CONFIG_FILE"
 # shellcheck disable=SC2163
 export "$P_API_KEY_ENV=$API_KEY_VALUE"
 
+# There is no Tor to verify in `none` mode; the warning below is the whole
+# story there.
+if [ "$NETWORK" = "none" ]; then VERIFY=0; fi
+export CALYPSO_VERIFY="$VERIFY"
+
 # Everything runs inside ONE oniux invocation. The host cannot reach into the
 # namespace — no --publish, no port forwarding, nothing (docs/FINDINGS.md F1).
 # Any check that has to see the namespace has to run in here.
 INNER=$(cat <<'INNER_EOF'
 set -euo pipefail
+
+if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "calypsocode: curl not found — it is what proves the egress is Tor." >&2
+    echo "calypsocode: install it, or accept an unverified session with --no-verify." >&2
+    exit 1
+  fi
+
+  echo "calypsocode: verifying egress from inside the namespace — a few seconds over Tor." >&2
+
+  CALYPSO_EXIT_IP=""
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    response="$(curl -s --max-time 60 https://check.torproject.org/api/ip || true)"
+    compact="${response// /}"
+    case "$compact" in
+      *'"IsTor":true'*)
+        CALYPSO_EXIT_IP="${compact##*\"IP\":\"}"
+        CALYPSO_EXIT_IP="${CALYPSO_EXIT_IP%%\"*}"
+        break
+        ;;
+      *'"IsTor":false'*)
+        echo "calypsocode: egress is NOT Tor. Refusing to start the agent." >&2
+        echo "calypsocode: the check answered, so traffic left this machine — it just" >&2
+        echo "calypsocode: did not go through Tor. Retrying will not fix that." >&2
+        exit 1
+        ;;
+      *)
+        echo "calypsocode: attempt $attempt/3 — no usable answer (dead circuit or timeout)." >&2
+        ;;
+    esac
+    attempt=$((attempt + 1))
+    if [ "$attempt" -le 3 ]; then sleep 2; fi
+  done
+
+  if [ -z "$CALYPSO_EXIT_IP" ]; then
+    echo "calypsocode: could not confirm Tor egress in 3 attempts." >&2
+    echo "calypsocode: roughly 1 circuit in 3 was dead in testing (docs/FINDINGS.md F4)," >&2
+    echo "calypsocode: so this is often worth simply running again." >&2
+    exit 1
+  fi
+
+  export CALYPSO_EXIT_IP
+  echo "calypsocode: egress verified — Tor exit $CALYPSO_EXIT_IP" >&2
+else
+  echo "calypsocode: WARNING — egress unverified. Nothing here has checked that" >&2
+  echo "calypsocode: this session's traffic leaves via Tor." >&2
+fi
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "calypsocode: opencode not found — curl -fsSL https://opencode.ai/install | bash" >&2
