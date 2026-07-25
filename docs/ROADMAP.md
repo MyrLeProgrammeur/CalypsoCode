@@ -75,6 +75,12 @@ inspection, and no content rewriting — see
    namespace — and refuses to launch if it succeeds
    ([F10](FINDINGS.md#f10--how-the-namespace-refuses-and-why-a-dns-based-leak-test-proves-nothing)).
 5. **Tor as one backend among several.** VPN-in-namespace, direct, custom SOCKS.
+   The first-run picker that presents them is built; the backends themselves are
+   not, and it says so rather than offering choices that would fail. When they
+   land, `socks` runs inside a namespace whose only route is the supplied
+   endpoint — otherwise it is the one row in the table where fail-closed does not
+   hold, since a SOCKS proxy is honoured by applications rather than enforced by
+   the kernel.
 
 Rewriting `bin/calypsocode` is step 1. Drop the host-side health check, drop
 LiteLLM from the default path, and keep the log outside the private `/tmp`. If
