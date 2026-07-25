@@ -18,8 +18,7 @@ than patched — they were the v0 defect that
 [F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
 proved unimplementable.
 
-Steps 1–4 are implemented — apart from the negative leak test noted in step 4 —
-and **the gate below has been run and passed**: a
+Steps 1–4 are implemented and **the gate below has been run and passed**: a
 real coding session completed through the launcher over Tor, in 35s across 8
 round trips ([F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)).
 
@@ -70,10 +69,11 @@ inspection, and no content rewriting — see
 3. **Startup check.** Once, before anything is sent: is the git identity the
    compartment's? Does the project path contain the OS username? Report, then
    get out of the way.
-4. **Session receipts.** Egress proof, compartment integrity, and an explicit
-   list of what was *not* removed. The **negative leak test belongs here and is
-   not built** — isolation is still trusted on F1's routing table rather than
-   proven per session ([still untested](FINDINGS.md#still-untested)).
+4. **Session receipts.** Egress proof, negative leak test, compartment
+   integrity, and an explicit list of what was *not* removed. The leak test
+   attempts what must fail — reaching the host's own network from inside the
+   namespace — and refuses to launch if it succeeds
+   ([F10](FINDINGS.md#f10--how-the-namespace-refuses-and-why-a-dns-based-leak-test-proves-nothing)).
 5. **Tor as one backend among several.** VPN-in-namespace, direct, custom SOCKS.
 
 Rewriting `bin/calypsocode` is step 1. Drop the host-side health check, drop

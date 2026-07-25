@@ -18,6 +18,61 @@ test_completed_session_leaves_a_receipt() {
   assert_equals "$(receipt_count)" "1"
 }
 
+# Accumulation on one account is the residual the tool cannot remove. Counting
+# it is the only honest thing left to do, so the count has to be right.
+test_receipt_counts_the_session() {
+  write_profile
+  stub_opencode
+  TEST_KEY=k launch
+  case "$(receipt_body)" in
+    *"session 1 in this compartment since"*) ;;
+    *) _fail "the first session should be counted as 1" "$(receipt_body)" ;;
+  esac
+}
+
+test_the_count_rises_across_sessions() {
+  write_profile
+  stub_opencode
+  TEST_KEY=k launch
+  TEST_KEY=k launch
+  TEST_KEY=k launch
+  case "$(receipt_body)" in
+    *"session 3 in this compartment since"*) ;;
+    *) _fail "the third session should be counted as 3" "$(receipt_body)" ;;
+  esac
+}
+
+# A launch that sent nothing is not a session, so it must not inflate the tally
+# any more than it writes a receipt.
+test_a_refused_launch_does_not_count() {
+  write_profile
+  stub_opencode
+  TEST_KEY=k launch
+  no_opencode
+  TEST_KEY=k launch            # refused: exit 127, no session
+  assert_status 127
+  stub_opencode
+  TEST_KEY=k launch
+  case "$(receipt_body)" in
+    *"session 2 in this compartment since"*) ;;
+    *) _fail "the refused launch should not have been counted" "$(receipt_body)" ;;
+  esac
+}
+
+test_each_compartment_counts_separately() {
+  write_profile
+  write_profile other "PROFILE=otherbox" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@localhost"
+  stub_opencode
+  TEST_KEY=k launch
+  TEST_KEY=k launch
+  TEST_KEY=k CALYPSO_NETWORK=none run_calypso --profile other --yes
+  case "$(receipt_body)" in
+    *"session 1 in this compartment since"*) ;;
+    *) _fail "a second compartment should start its own count" "$(receipt_body)" ;;
+  esac
+}
+
 test_receipt_states_what_was_not_removed() {
   write_profile
   stub_opencode
