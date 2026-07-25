@@ -36,6 +36,13 @@ GIT_NAME=dev
 GIT_EMAIL=dev@localhost
 ```
 
+Run `calypsocode` with no profile yet and it offers to write one: it asks which
+network backend you want, states plainly which are built and which are not, and
+never picks for you. Without a terminal, or with `--yes`, it refuses rather than
+choosing a default — a backend selected on your behalf is a leak with a friendly
+face. The answers go into the profile and nowhere else, so there is never a
+second place a backend choice could hide.
+
 One launch = one namespace = one circuit. One compartment = one key = one
 config = one identity, and it persists across launches. Nothing crosses between
 compartments.

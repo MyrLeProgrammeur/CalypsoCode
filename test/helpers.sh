@@ -150,6 +150,21 @@ run_calypso() {
   return 0
 }
 
+# Same, but through a pseudo-terminal, so paths guarded by `[ -t 0 ]` can be
+# exercised instead of only their refusal branch. The first argument is what to
+# type; the pty's carriage returns are stripped so assertions match normally.
+run_calypso_tty() {
+  local input="$1"
+  shift
+  local raw
+  raw="$(printf '%s' "$input" | script -qec "$CALYPSO_BIN $*" /dev/null 2>&1)"
+  STATUS=$?
+  OUTPUT="$(printf '%s' "$raw" | tr -d '\r')"
+  return 0
+}
+
+have_pty() { command -v script >/dev/null 2>&1; }
+
 # --- assertions ------------------------------------------------------------
 
 _fail() {
