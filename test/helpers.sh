@@ -80,6 +80,67 @@ EOF
 # Removes the agent from PATH, simulating "not installed".
 no_opencode() { rm -f "$SANDBOX/bin/opencode"; }
 
+# Runs the command it is given, in this namespace. Enough to exercise the whole
+# inner script without Tor: what oniux adds is isolation, and isolation is what
+# the curl stub below simulates.
+stub_oniux() {
+  cat > "$SANDBOX/bin/oniux" <<'EOF'
+#!/usr/bin/env bash
+exec "$@"
+EOF
+  chmod +x "$SANDBOX/bin/oniux"
+}
+
+# Makes leak-target discovery deterministic. Without it the tests would probe
+# whatever addresses the developer's machine happens to have.
+stub_ip() {
+  cat > "$SANDBOX/bin/ip" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  route*)        echo "default via 10.9.9.1 dev eth0 proto dhcp src 10.9.9.42 metric 600" ;;
+  *"addr show"*) echo "2: eth0    inet 10.9.9.42/24 brd 10.9.9.255 scope global eth0" ;;
+esac
+EOF
+  chmod +x "$SANDBOX/bin/ip"
+}
+
+# An `ip` that reports nothing, so no private target can be discovered.
+stub_ip_empty() {
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SANDBOX/bin/ip"
+  chmod +x "$SANDBOX/bin/ip"
+}
+
+# Simulates the namespace's network. Private targets are unreachable and the
+# egress check reports Tor, unless STUB_CURL_REACHABLE names a host that should
+# answer — which is what a broken compartment looks like.
+stub_curl() {
+  cat > "$SANDBOX/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do
+  case "$arg" in http://*|https://*) url="$arg" ;; esac
+done
+case "$url" in
+  *check.torproject.org*) echo '{"IsTor":true,"IP":"185.220.101.1"}'; exit 0 ;;
+esac
+host="${url#http://}"
+host="${host%%/*}"
+for reachable in ${STUB_CURL_REACHABLE:-}; do
+  [ "$reachable" = "$host" ] && exit 0
+done
+exit 7
+EOF
+  chmod +x "$SANDBOX/bin/curl"
+}
+
+# The full set for an isolated-namespace launch: agent, oniux, ip, curl.
+stub_namespace() {
+  stub_opencode
+  stub_oniux
+  stub_ip
+  stub_curl
+}
+
 # --- running ---------------------------------------------------------------
 
 # Runs the launcher, capturing combined output and status without aborting.

@@ -341,7 +341,10 @@ what one session cannot show.
    once, on one version. An agent that later writes somewhere new — a plugin
    cache, an MCP server's own state — reopens the question silently. Nothing
    currently re-checks it.
-4. **Negative leak test.** [DESIGN](DESIGN.md#proof-not-claims) asks for the
-   test that deliberately attempts what must fail — reach a host interface,
-   resolve DNS outside the namespace — and asserts it does. The isolation is
-   currently trusted on F1's routing table, not proven per session.
+4. **What the leak test does not cover.** It is now built: every session proves
+   the host's private addresses are unreachable before the agent starts, so
+   isolation is no longer trusted on F1's routing table alone. What it does not
+   prove is the absence of a leak by some path it does not probe — a protocol
+   other than TCP, an interface that appeared after discovery, an address the
+   host does not have. It shows the obvious ways out are shut, not that none
+   exists.

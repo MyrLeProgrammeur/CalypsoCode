@@ -50,10 +50,15 @@ usage:
 options:
   --profile NAME   compartment to launch (default: default). Resolved to
                    ~/.config/calypsocode/profiles/NAME.env
-  --no-verify      skip the egress check. It costs a few seconds over Tor;
-                   skipping it means the session runs with no evidence that
-                   its traffic left via Tor, and the receipt says so.
+  --no-verify      skip the egress check AND the leak test. Both cost a few
+                   seconds; skipping them means the session runs with no
+                   evidence that it is isolated, and the receipt says so.
   -y, --yes        do not wait for confirmation of the startup check
+  --force-unsafe   launch even though the leak test found the LAN reachable
+                   from inside the namespace. For debugging isolation, never
+                   for work. Command line only — deliberately not settable
+                   from a profile or the environment, so it cannot become
+                   somebody's silent default.
 
 commands:
   profile          print the resolved profile and exit
@@ -63,8 +68,9 @@ environment:
   CALYPSO_NETWORK  override the profile's NETWORK for one run. `none` disables
                    isolation entirely and is warned about on every launch.
 
-Every profile is one namespace, one circuit, one key, one config. Nothing
-crosses between compartments — see docs/DESIGN.md.
+One launch is one namespace and one circuit. One compartment is one key, one
+config and one identity, persisting across launches. Nothing crosses between
+compartments — see docs/DESIGN.md.
 EOF
 }
 
@@ -205,9 +211,29 @@ SESSION_START_EPOCH=0
 SESSION_START_STAMP=""
 EGRESS_FILE=""
 STARTED_FILE=""
+LEAK_FILE=""
 RECEIPT_DONE=0
 
 os_username() { id -un; }
+
+# Private addresses the namespace must NOT be able to reach. They are collected
+# out here because they are invisible from inside — the namespace has one route
+# and knows nothing of the host's interfaces.
+#
+# 169.254.42.0/24 is excluded on purpose: that is onion0's own subnet, and
+# 169.254.42.53 is Tor's resolver. Both are legitimately reachable, and testing
+# them would fail every session (docs/FINDINGS.md F10).
+# Finding nothing is a valid answer here — it is the inner script's job to
+# refuse on an empty list, with a message that says why. So every stage is kept
+# from failing the function: under `set -o pipefail` a filter that matches
+# nothing, or a missing `ip`, would otherwise abort the launcher before it ever
+# reached the namespace.
+leak_targets() {
+  {
+    ip route 2>/dev/null | awk '/^default/ && $3 ~ /^[0-9]/ { print $3 }' || true
+    ip -4 -o addr show scope global 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 || true
+  } | awk '!/^169\.254\.42\./' | sort -u || true
+}
 
 # The path leak Calypso does not fix. Convention handles it; the receipt states
 # it. See docs/THREAT-MODEL.md#keep-your-username-out-of-your-paths.
@@ -271,12 +297,16 @@ receipt_write() {
   if [ "$RECEIPT_DONE" = "1" ]; then return "$status"; fi
   RECEIPT_DONE=1
 
-  local end_epoch end_stamp elapsed exit_ip user receipt started=0
+  local end_epoch end_stamp elapsed exit_ip user receipt started=0 leak=""
 
   exit_ip=""
   if [ -n "$EGRESS_FILE" ] && [ -f "$EGRESS_FILE" ]; then
     read -r exit_ip < "$EGRESS_FILE" || true
     rm -f "$EGRESS_FILE"
+  fi
+  if [ -n "$LEAK_FILE" ] && [ -f "$LEAK_FILE" ]; then
+    read -r leak < "$LEAK_FILE" || true
+    rm -f "$LEAK_FILE"
   fi
   if [ -n "$STARTED_FILE" ] && [ -f "$STARTED_FILE" ]; then
     started=1
@@ -286,6 +316,7 @@ receipt_write() {
   # A refused launch is not a session. Saying what "was not removed" when
   # nothing was sent would be a receipt for something that never happened.
   if [ "$started" != "1" ]; then
+    rm -f "$LEAK_FILE"
     echo "calypsocode: the agent never started — nothing was sent, so no receipt." >&2
     return "$status"
   fi
@@ -311,6 +342,24 @@ receipt_write() {
     else
       echo "network:      tor, egress NOT verified (--no-verify)"
     fi
+    case "$leak" in
+      passed*)
+        echo "isolation:    leak test passed — ${leak#passed } private target(s)"
+        echo "              unreachable from inside the namespace"
+        ;;
+      forced*)
+        echo "isolation:    LEAK —${leak#forced} answered from inside the namespace."
+        echo "              Launched anyway with --force-unsafe. This session was"
+        echo "              NOT isolated from your own network."
+        ;;
+      *)
+        if [ "$VERIFY" = "1" ]; then
+          echo "isolation:    leak test did not complete — isolation unproven"
+        else
+          echo "isolation:    leak test NOT RUN (--no-verify) — isolation unproven"
+        fi
+        ;;
+    esac
     echo "identity:     git $P_GIT_NAME <$P_GIT_EMAIL>, TZ=UTC, LC_ALL=C"
     echo "config:       compartment-local only ($COMPARTMENT_DIR)"
     echo "session:      $SESSION_START_STAMP – $end_stamp (${elapsed}s)"
@@ -389,6 +438,10 @@ PROFILE_NAME="default"
 COMMAND=""
 VERIFY=1
 ASSUME_YES=0
+# Read from argv and nowhere else. It is exported unconditionally below, so a
+# CALYPSO_FORCE_UNSAFE already in the environment is overwritten rather than
+# obeyed — the flag cannot become a silent default.
+FORCE_UNSAFE=0
 AGENT_ARGS=()
 
 case "${1:-}" in
@@ -415,6 +468,10 @@ while [ $# -gt 0 ]; do
       ;;
     --no-verify)
       VERIFY=0
+      shift
+      ;;
+    --force-unsafe)
+      FORCE_UNSAFE=1
       shift
       ;;
     -y | --yes)
@@ -504,9 +561,14 @@ startup_check
 mkdir -p "$STATE_DIR"
 EGRESS_FILE="$STATE_DIR/.egress-$$"
 STARTED_FILE="$STATE_DIR/.started-$$"
-rm -f "$EGRESS_FILE" "$STARTED_FILE"
+LEAK_FILE="$STATE_DIR/.leak-$$"
+rm -f "$EGRESS_FILE" "$STARTED_FILE" "$LEAK_FILE"
 export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
 export CALYPSO_STARTED_FILE="$STARTED_FILE"
+export CALYPSO_LEAK_FILE="$LEAK_FILE"
+LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
+export CALYPSO_LEAK_TARGETS="$LEAK_TARGETS"
+export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
 
 # Everything runs inside ONE oniux invocation. The host cannot reach into the
 # namespace — no --publish, no port forwarding, nothing (docs/FINDINGS.md F1).
@@ -516,9 +578,60 @@ set -euo pipefail
 
 if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
   if ! command -v curl >/dev/null 2>&1; then
-    echo "calypsocode: curl not found — it is what proves the egress is Tor." >&2
+    echo "calypsocode: curl not found — it is what proves the egress is Tor and" >&2
+    echo "calypsocode: the host's network unreachable." >&2
     echo "calypsocode: install it, or accept an unverified session with --no-verify." >&2
     exit 1
+  fi
+
+  # The negative test: attempt what must fail. Every other check here confirms
+  # the happy path, and a happy path cannot tell a sealed namespace from a
+  # broken one.
+  #
+  # The proxy is bypassed deliberately. With oniux's ALL_PROXY in place these
+  # targets are refused by Tor's SOCKS server (rc=97), which proves the variable
+  # is set — not that the route is constrained, which is the actual claim
+  # (docs/FINDINGS.md F10).
+  leak_targets_in="${CALYPSO_LEAK_TARGETS:-}"
+  if [ -z "${leak_targets_in// /}" ]; then
+    echo "calypsocode: cannot run the leak test — no private addresses were found on" >&2
+    echo "calypsocode: the host, so there is nothing to prove unreachable." >&2
+    echo "calypsocode: a test that did not run is not a test that passed." >&2
+    exit 1
+  fi
+
+  echo "calypsocode: leak test — the host's own network must be unreachable from here." >&2
+  leak_reached=""
+  leak_count=0
+  for leak_target in $leak_targets_in; do
+    leak_count=$((leak_count + 1))
+    if (
+      unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
+      curl -s --noproxy '*' -o /dev/null --max-time 5 "http://$leak_target/"
+    ) 2>/dev/null; then
+      leak_reached="$leak_reached $leak_target"
+    fi
+  done
+
+  if [ -n "$leak_reached" ]; then
+    echo "calypsocode: LEAK DETECTED —$leak_reached answered from inside the namespace." >&2
+    echo "calypsocode: the compartment is not sealed. Traffic you believed isolated can" >&2
+    echo "calypsocode: reach your own network, and the receipt's claims would be false." >&2
+    if [ "${CALYPSO_FORCE_UNSAFE:-0}" = "1" ]; then
+      echo "calypsocode: --force-unsafe given — launching anyway. The receipt will say so." >&2
+      if [ -n "${CALYPSO_LEAK_FILE:-}" ]; then
+        printf 'forced%s\n' "$leak_reached" > "$CALYPSO_LEAK_FILE"
+      fi
+    else
+      echo "calypsocode: re-run with --force-unsafe to launch anyway — for debugging" >&2
+      echo "calypsocode: isolation, never for work." >&2
+      exit 1
+    fi
+  else
+    echo "calypsocode: leak test passed — $leak_count private target(s) unreachable." >&2
+    if [ -n "${CALYPSO_LEAK_FILE:-}" ]; then
+      printf 'passed %s\n' "$leak_count" > "$CALYPSO_LEAK_FILE"
+    fi
   fi
 
   echo "calypsocode: verifying egress from inside the namespace — a few seconds over Tor." >&2
