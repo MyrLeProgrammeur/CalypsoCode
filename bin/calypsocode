@@ -246,6 +246,33 @@ path_leaks_username() {
   esac
 }
 
+# Counts sessions per compartment and reports the total. Deliberately not
+# rotation: minting a fresh key on the same account changes nothing the provider
+# sees, because every key resolves to the same customer. What accumulates is
+# history on one account, and the only thing the launcher can honestly do about
+# it is make it visible. Called once a session has actually happened, so a
+# refused launch never counts.
+#
+# Only ever called from receipt_write, which shellcheck already cannot see is
+# invoked (it runs from the EXIT, INT and TERM traps), so this looks unused too.
+# shellcheck disable=SC2329
+session_tally() {
+  local file count since
+  file="$STATE_DIR/sessions-$P_PROFILE"
+  count=0
+  since=""
+  if [ -f "$file" ]; then
+    read -r count since < "$file" || true
+  fi
+  case "$count" in
+    '' | *[!0-9]*) count=0 ;;
+  esac
+  [ -n "$since" ] || since="$(date -u +%Y-%m-%d)"
+  count=$((count + 1))
+  printf '%s %s\n' "$count" "$since" > "$file"
+  printf '%s %s\n' "$count" "$since"
+}
+
 startup_check() {
   local user
   user="$(os_username)"
@@ -325,6 +352,10 @@ receipt_write() {
   end_stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   elapsed=$((end_epoch - SESSION_START_EPOCH))
   user="$(os_username)"
+  local tally session_no session_since
+  tally="$(session_tally)"
+  session_no="${tally%% *}"
+  session_since="${tally#* }"
 
   mkdir -p "$STATE_DIR"
   receipt="$STATE_DIR/receipt-$(date -u +%Y%m%dT%H%M%SZ)-$P_PROFILE.txt"
@@ -371,6 +402,8 @@ receipt_write() {
     fi
     echo "              account: \$$P_API_KEY_ENV at $P_API_BASE — the provider"
     echo "                       knows which paying customer this was"
+    echo "                       session $session_no in this compartment since"
+    echo "                       $session_since, all of them on that account"
     echo
     echo "Calypso is not in the request path, so this states session facts, not"
     echo "contents. It cannot count requests or tell you what was sent — by design:"
