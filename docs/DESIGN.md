@@ -178,12 +178,15 @@ crosses.
 
 ### Network backends
 
-| Value | Mechanism |
-|---|---|
-| `tor` | `oniux` (verified working) |
-| `vpn` | WireGuard inside the namespace |
-| `direct` | plain namespace, no isolation |
-| `socks` | user-supplied SOCKS endpoint |
+| Value | Mechanism | Status |
+|---|---|---|
+| `tor` | `oniux` | **implemented**, verified working |
+| `none` | no namespace at all — testing only | **implemented**, warns that there is no isolation |
+| `vpn` | WireGuard inside the namespace | designed, not built |
+| `direct` | plain namespace, no isolation | designed, not built |
+| `socks` | user-supplied SOCKS endpoint | designed, not built |
+
+`bin/calypsocode` currently rejects anything but `tor` and `none`.
 
 Tor is one backend, not the thesis. Two reasons that matters:
 
@@ -281,6 +284,8 @@ boundary, then silence, then the receipt.
   convention instead ([THREAT-MODEL.md](THREAT-MODEL.md)).
 - **Do not rebuild the agent.** The agentic loop, tool use, and context
   management are years of work and are why OpenCode exists. Wrap or fork one.
-- **No hosted or pooled multi-user service.** Ruled out on provider-ToS grounds.
+- **No hosted or pooled multi-user service in the launcher.** It is a local
+  tool. Whether such a service should exist at all is a project-direction
+  question, outside what this document specifies.
 - **No verifying other people's guarantees.** Calypso does not attest enclaves
   or vouch for provider policy. Provider choice is the user's.

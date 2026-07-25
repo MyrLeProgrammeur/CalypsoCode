@@ -8,11 +8,13 @@ The scope in one line: **Calypso erases who is asking, not what is asked.**
 Content confidentiality is a property of the provider you choose, not of this
 tool. See [DESIGN.md](DESIGN.md#the-boundary).
 
-> **Current status.** `bin/calypsocode` does not run; the architecture it
-> implements was disproven by testing
-> ([FINDINGS.md](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)).
-> This document describes what the [redesign](DESIGN.md) targets. Nothing here
-> is currently delivered by working code.
+> **Current status.** `bin/calypsocode` runs. It was rewritten around the
+> compartment model after testing disproved the original architecture
+> ([F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)),
+> and a real coding session has since completed through it over Tor
+> ([F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)).
+> What follows under "does NOT protect" is not a to-do list: those are limits of
+> the design itself, and they stay true however much of the roadmap gets built.
 
 ## What it protects
 
@@ -40,7 +42,8 @@ tool. See [DESIGN.md](DESIGN.md#the-boundary).
   arrival. If the account is tied to your email or card, the provider knows it
   is you. Compartments limit what any one account accumulates; nothing here
   makes an account anonymous. That would require blind signatures and a service
-  operator, which is [out of scope](DESIGN.md#scope-boundary).
+  operator; the launcher is a local tool and is neither
+  ([scope](DESIGN.md#scope-boundary)).
 - **The content of your prompts and your code.** Calypso does not read,
   rewrite, or scrub what you send — deliberately
   ([why](DESIGN.md#why-this-boundary-and-not-a-wider-one)). If you need the
@@ -68,8 +71,8 @@ tool. See [DESIGN.md](DESIGN.md#the-boundary).
   chain is. A KYC exchange purchase followed by a direct transfer stays
   traceable through chain analysis, independent of the network layer.
 - **A shared anonymity set.** Compartmentalization does not mix your traffic
-  with other users' — only a multi-user pooled service would, and that is ruled
-  out. Separating your own identities limits linkage between them. Your
+  with other users' — only a multi-user pooled service would, and the launcher
+  is not one. Separating your own identities limits linkage between them. Your
   anonymity set is still one.
 - **Fraud-system reactions.** Providers may flag accounts whose API traffic
   arrives from Tor exits — a classic credential-theft signal. ToS permission and

@@ -1,4 +1,4 @@
-# LEGACY EXAMPLE — matches bin/calypsocode, which does not work.
+# LEGACY EXAMPLE — matches the original bin/calypsocode, which was replaced.
 # Kept for reference. See docs/FINDINGS.md and docs/DESIGN.md.
 #
 # Two things in this file are known-wrong:
@@ -8,7 +8,7 @@
 #    per request over one shared Tor circuit emits N credentials from a single
 #    exit IP in one time window, which proves to the provider that those
 #    accounts are the same person. Rotation now happens at the compartment
-#    boundary instead — one key, one circuit, one context per launch.
+#    boundary instead — one key per compartment, one circuit per launch.
 #    See docs/DESIGN.md#why-per-request-rotation-was-wrong.
 #
 #    LiteLLM cannot fix this: per-model outbound proxy is an open, unimplemented

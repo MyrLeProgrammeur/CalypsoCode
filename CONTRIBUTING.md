@@ -3,17 +3,19 @@
 Thanks for the interest. This project is small and deliberately simple —
 contributions are welcome, but let's keep that spirit.
 
-> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The launcher runs, but the
-> premise behind it is unmeasured: no real coding session has gone through it
-> yet ([the gate](docs/ROADMAP.md#gate)). Anything that assumes Tor is usable
-> for agentic work is assuming what this project has not yet shown.
+> **Read [docs/ROADMAP.md](docs/ROADMAP.md) first.** The launcher runs and the
+> gate has been passed — one real coding session over Tor, measured
+> ([the gate](docs/ROADMAP.md#gate)). That is an existence proof, not a track
+> record: how a provider reacts to Tor-origin traffic over weeks, and how the
+> latency feels on a large repository, remain unmeasured
+> ([still untested](docs/FINDINGS.md#still-untested)).
 
 ## No CLA
 
-No Contributor License Agreement is required. CalypsoCode is under
-[AGPL-3.0](LICENSE) and will stay that way; there's no planned dual commercial
-license that would require collecting rights over your contribution. Your code
-stays AGPL-3.0, same as the rest of the project.
+No Contributor License Agreement is required, and none will be. CalypsoCode is
+under [AGPL-3.0](LICENSE) and stays that way — this tool's job is to verify
+things on your behalf, and a verifier nobody can read is worth nothing. Your
+code stays AGPL-3.0, same as the rest of the project.
 
 ## Before opening a PR
 
@@ -67,7 +69,6 @@ Delete branches after merge.
 
 ## Local checks before pushing
 
-There's no test suite yet (the project is currently a bash script plus config).
 Before pushing:
 
 ```bash
@@ -120,8 +121,9 @@ Explicitly **out of scope** (see [docs/ROADMAP.md](docs/ROADMAP.md#decisions-tak
   addressed is handled by user-side convention.
 - **Verifying other providers' guarantees** (enclave attestation, no-logging
   policy). Provider choice belongs to the user.
-- Any hosted or pooled service shared between multiple users — ruled out on
-  provider-ToS grounds.
+- Any hosted or pooled service shared between multiple users. The launcher is a
+  local tool; adding a service is a project-direction decision rather than
+  something to settle in a code review.
 - Rebuilding the coding agent itself. Wrap or fork OpenCode; the
   differentiation here is the privacy layer.
 - Per-request key rotation. It is unsound on a shared circuit and not

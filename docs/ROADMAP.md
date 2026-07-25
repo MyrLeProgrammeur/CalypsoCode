@@ -18,7 +18,8 @@ than patched — they were the v0 defect that
 [F1](FINDINGS.md#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux)
 proved unimplementable.
 
-Steps 1–4 are implemented and **the gate below has been run and passed**: a
+Steps 1–4 are implemented — apart from the negative leak test noted in step 4 —
+and **the gate below has been run and passed**: a
 real coding session completed through the launcher over Tor, in 35s across 8
 round trips ([F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)).
 
@@ -60,16 +61,19 @@ Everything in v1 is environment configuration. There is no proxy, no traffic
 inspection, and no content rewriting — see
 [the boundary](DESIGN.md#why-this-boundary-and-not-a-wider-one).
 
-1. **Profiles and compartments.** One launch = one namespace = one circuit =
-   one key = one config. Independent of the gate, immediately useful.
+1. **Profiles and compartments.** One launch = one namespace = one circuit. One
+   compartment = one key = one config = one identity, persisting across
+   launches. Independent of the gate, immediately useful.
 2. **Identity configuration.** `LC_ALL`, `TZ`, hostname, git author/committer,
    per-compartment `XDG_CONFIG_HOME`. Each is one line and removes a signal at
    its source.
 3. **Startup check.** Once, before anything is sent: is the git identity the
    compartment's? Does the project path contain the OS username? Report, then
    get out of the way.
-4. **Session receipts.** Egress proof, negative leak test, compartment
-   integrity, and an explicit list of what was *not* removed.
+4. **Session receipts.** Egress proof, compartment integrity, and an explicit
+   list of what was *not* removed. The **negative leak test belongs here and is
+   not built** — isolation is still trusted on F1's routing table rather than
+   proven per session ([still untested](FINDINGS.md#still-untested)).
 5. **Tor as one backend among several.** VPN-in-namespace, direct, custom SOCKS.
 
 Rewriting `bin/calypsocode` is step 1. Drop the host-side health check, drop
@@ -99,7 +103,9 @@ any loopback hop survives, set `NO_PROXY=127.0.0.1,localhost`
 - **LiteLLM is optional.** With content rewriting out of scope, nothing requires
   Calypso to sit in the request path.
 - **Do not rebuild the coding agent.** Wrap or fork OpenCode.
-- **No hosted or pooled multi-user service.** Provider ToS.
+- **The launcher is a local tool.** It includes no hosted or pooled multi-user
+  service. Whether one should exist is a project-direction decision, not a code
+  change.
 - **Tor is a backend, not the thesis.**
 
 ## Honest assessment
