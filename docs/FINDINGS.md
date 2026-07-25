@@ -252,6 +252,76 @@ for every compartment.
 new agent wrapped by Calypso needs this enumerated, not assumed — `debug paths`
 or its equivalent, checked, before claiming the compartment holds.
 
+## F10 — How the namespace refuses, and why a DNS-based leak test proves nothing
+
+**Status: confirmed. Measured 2026-07-25, Linux 7.0.0-28-generic.**
+
+Three measurements taken to design the negative leak test — the test that
+deliberately attempts what must fail. They rule out the obvious design and
+point at the one that works.
+
+### DNS answers everything, including names that do not exist
+
+Inside the namespace, `/etc/resolv.conf` points at Tor's own resolver, so
+nothing reaches the host's:
+
+```
+nameserver 169.254.42.53
+nameserver fe80::53
+```
+
+But Tor's automap hands out a synthetic address for *any* name it is asked
+about, without checking that the name resolves at all:
+
+```
+probe-2-06b54b09.example.com  →  fec0:70bd:8ac5:2708:3578:4b:cf1a:2099   rc=0
+wikipedia.org                 →  fec0:103e:64dd:ff54:e587:5406:6383:ae76  rc=0
+```
+
+Both are in `fec0::/10`, the deprecated site-local range Tor uses for virtual
+addresses; the real destination is resolved at connection time, over the
+circuit.
+
+**Consequence.** A negative test shaped as *"resolving a name outside Tor must
+fail"* **passes against working and broken code alike** — Tor answers
+everything either way. It measures nothing. That is precisely the test
+[CONTRIBUTING](../CONTRIBUTING.md) forbids: one that passes against broken code
+is worse than no test.
+
+### The reliable signal is a connection attempt to a private address
+
+With every proxy variable unset and `curl --noproxy '*'`:
+
+```
+192.168.1.1    rc=7   2711 ms    (LAN gateway; first packet builds the circuit)
+192.168.1.43   rc=7    246 ms    (the host's own LAN address)
+172.17.0.1     rc=7    252 ms    (docker bridge)
+1.1.1.1        rc=0    594 ms    (public: succeeds, carried over Tor via onion0)
+```
+
+Private destinations fail fast and deterministically; public ones succeed
+through the tunnel. That asymmetry is the signal. Budget for the first attempt
+being ~2.7s while the circuit is built, and ~250ms after.
+
+### The test must bypass the proxy, or it proves the wrong thing
+
+The same targets, with oniux's `ALL_PROXY=socks5h://localhost:9050` left in
+place, return `rc=97` — `CURLE_PROXY`, meaning Tor's SOCKS server declined to
+proxy to a private address.
+
+That is a **weaker** result than it looks: it proves the environment variable is
+set, not that the transport is constrained. The claim in
+[THREAT-MODEL](THREAT-MODEL.md) is about kernel-level routing, and
+[F2](#f2--oniux-injects-all_proxy-which-breaks-same-namespace-loopback) already
+established that isolation comes from the routing table rather than the
+variable. Only by unsetting the proxy and passing `--noproxy '*'` does a failure
+become evidence about the route.
+
+**Consequence for the implementation.** Test connections, not resolution; target
+private addresses discovered on the host and passed in (they are invisible from
+inside); bypass the proxy; and do not test `169.254.42.0/24` — that is onion0's
+own subnet and is legitimately reachable.
+
 ---
 
 ## Still untested
