@@ -36,8 +36,9 @@ GIT_NAME=dev
 GIT_EMAIL=dev@localhost
 ```
 
-One launch = one namespace = one circuit = one key = one config. Nothing
-crosses between compartments.
+One launch = one namespace = one circuit. One compartment = one key = one
+config = one identity, and it persists across launches. Nothing crosses between
+compartments.
 
 This is for people whose **network is observed** while their account is not the
 threat: developers in censoring jurisdictions, people whose employer or ISP

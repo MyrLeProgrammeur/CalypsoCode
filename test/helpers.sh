@@ -3,8 +3,8 @@
 # the tool is a bash script, and a bash script is enough to test it.
 #
 # Every test runs hermetically: its own profile directory, compartment home,
-# state directory, and a PATH containing only stubs. Nothing touches the
-# network, the real config, or the real agent.
+# state directory, and a PATH holding only the stubs and the system utilities.
+# Nothing touches the network, the real config, or the real agent.
 
 TESTS_RUN=0
 TESTS_FAILED=0
@@ -27,7 +27,11 @@ sandbox_setup() {
   export CALYPSO_PROFILE_DIR="$SANDBOX/profiles"
   export CALYPSO_HOME="$SANDBOX/home"
   export CALYPSO_STATE_DIR="$SANDBOX/state"
-  export PATH="$SANDBOX/bin:$ORIGINAL_PATH"
+  # The stub dir plus system utilities, and deliberately NOT $ORIGINAL_PATH: a
+  # developer machine has the real opencode and oniux installed, so no_opencode()
+  # would fall through to the real agent, which waits on its TUI forever. CI
+  # never caught it because CI has neither binary.
+  export PATH="$SANDBOX/bin:/usr/bin:/bin"
   # Tests must never depend on the developer's real key.
   unset VENICE_API_KEY_ACME TEST_KEY 2>/dev/null || true
 }
