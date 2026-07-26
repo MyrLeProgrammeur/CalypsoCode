@@ -1,5 +1,7 @@
 # Scope — forking OpenCode into CalypsoCode
 
+> Superseded by engine-recon.md (measured against the actual clone).
+
 > Measured against `sst/opencode` at `dev`, cloned 2026-07-24. Numbers are
 > counted, not estimated. Nothing here is a recommendation to proceed; it is
 > what proceeding costs.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # calypsocode — run a coding agent under a compartment identity.
 #
-# Calypso erases who is asking, not what is asked. Nothing here inspects or
-# modifies traffic: every identifier is removed before the agent starts, by
-# controlling the environment it runs in.
+# CalypsoCode hides your network identity from everyone except the provider you
+# pay. Nothing here inspects or modifies traffic: every identifier is removed
+# before the agent starts, by controlling the environment it runs in.
 #
 # Design: docs/DESIGN.md · Verified stack behaviour: docs/FINDINGS.md
 set -euo pipefail

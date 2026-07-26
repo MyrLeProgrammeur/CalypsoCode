@@ -16,7 +16,8 @@ transmits, and reports per session what it removed and what it did not.
 
 ## The idea
 
-**Calypso erases who is asking. Not what is asked.**
+**CalypsoCode hides your network identity from everyone except the provider you
+pay.**
 
 Whether a provider can *read* your code and prompts is a property of the
 provider you buy from — pick a hardware enclave like Tinfoil if that matters to
@@ -53,6 +54,60 @@ monitors what they connect to, people where certain questions are dangerous to
 be seen asking. Your provider still knows which customer is paying. What the
 observer between you and the provider learns is nothing — including which model
 you chose, uncensored or otherwise.
+
+## Install
+
+Linux only. Three pieces: the launcher, the agent it runs, and `oniux` for the
+network namespace.
+
+**1. The launcher.** It resolves everything from `$XDG_CONFIG_HOME` and uses no
+paths relative to its own location, so a symlink is the whole install:
+
+```sh
+git clone https://github.com/MyrLeProgrammeur/CalypsoCode.git
+cd CalypsoCode
+ln -s "$PWD/bin/calypsocode" ~/.local/bin/calypsocode
+```
+
+**2. The agent.** `calypsocode-agent` has no published release yet, so it is built
+from source. It is a fork of OpenCode (see [The agent](#the-agent)) and needs
+`bun` — pinned at `1.3.14` — plus `node-gyp` on `PATH`, because one dependency has
+no prebuilt binary for every platform and falls back to compiling:
+
+```sh
+bun install -g node-gyp
+git clone https://github.com/MyrLeProgrammeur/calypsocode-agent.git
+cd calypsocode-agent
+bun install
+bun run --cwd packages/opencode script/build.ts --single
+ln -s "$PWD/packages/opencode/dist/"*"/bin/calypsocode-agent" ~/.local/bin/
+```
+
+`--single` builds for the current platform only. The result is a self-contained
+binary — it needs no `bun` at runtime. Note the symlink points into the build
+directory, which the next build erases and recreates.
+
+**3. oniux**, from the Tor Project — experimental, per its own announcement:
+
+```sh
+cargo install --git https://gitlab.torproject.org/tpo/core/oniux
+```
+
+**Check it.** `~/.local/bin` must be on your `PATH` first:
+
+```sh
+calypsocode doctor
+```
+
+`doctor` reports what it checked and what it could not, per profile: `oniux`,
+`calypsocode-agent`, and whether the compartment's key is present. It does not
+conclude that the stack works — that is what the receipt at the end of a real
+session is for.
+
+You will need a profile before `doctor` has anything to check. Run `calypsocode`
+with no profile and it offers to write one. The subcommand comes first, so it is
+`calypsocode doctor --profile NAME` — `calypsocode --profile NAME doctor` is read
+as a launch.
 
 ## How it works: configure, don't rewrite
 

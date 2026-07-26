@@ -1,5 +1,7 @@
 # Engine recon — Batch 2 of `calypsocode-ui-rebrand.md`
 
+> Deliverable of calypsocode-ui-rebrand.md Batch 2.
+
 Fork, build, and `@opentui` reconnaissance for the real CalypsoCode agent
 fork. This is the deliverable for Batch 2 — Batch 3 (rebrand + animation)
 should scope its effects against the findings below, not against

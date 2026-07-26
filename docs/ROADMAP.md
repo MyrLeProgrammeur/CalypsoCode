@@ -22,6 +22,12 @@ Steps 1–4 are implemented and **the gate below has been run and passed**: a
 real coding session completed through the launcher over Tor, in 35s across 8
 round trips ([F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)).
 
+The agent ships too. `calypsocode-agent` — a rebranded fork of OpenCode — is what
+the launcher execs, and it no longer names itself in the `User-Agent` sent to a
+generic provider ([the plan](plans/done/calypsocode-ui-rebrand.md),
+[F11](FINDINGS.md#f11--opencode-sends-a-client-identifying-user-agent-to-a-generic-openai-compatible-provider)
+for the measurement that made it necessary).
+
 What remains is step 5, and the things one session cannot establish — how a
 provider responds to Tor-origin traffic over weeks, and how the latency feels
 on a large repository rather than a toy task.
@@ -30,10 +36,11 @@ on a large repository rather than a toy task.
 
 **Passed. Tor stays the default.**
 
-The test was: install `opencode`, obtain a Venice key, and run one real coding
+The test was: install the agent, obtain a Venice key, and run one real coding
 session end-to-end under the compartment design, timing the round trips. It was
 run, and [F8](FINDINGS.md#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip)
-records the numbers.
+records the numbers. The agent was upstream `opencode` at the time — the fork
+that replaced it came later, and this gate says nothing about it.
 
 Both premise risks are answered:
 
@@ -89,8 +96,9 @@ any loopback hop survives, set `NO_PROXY=127.0.0.1,localhost`
 
 ## Decisions taken
 
-- **The thesis: Calypso erases who is asking, not what is asked.** Content
-  confidentiality is a property of the provider the user chooses.
+- **The thesis: CalypsoCode hides your network identity from everyone except the
+  provider you pay.** Content confidentiality is a property of the provider the
+  user chooses.
 - **No content rewriting.** Not prompts, not code, not tool calls. Two-way
   translation with per-session state, covering every encoding, whose failures
   are silent and whose bugs corrupt user source — rejected as more dangerous
@@ -108,7 +116,9 @@ any loopback hop survives, set `NO_PROXY=127.0.0.1,localhost`
   Replaced by per-compartment rotation plus optional time-based retirement.
 - **LiteLLM is optional.** With content rewriting out of scope, nothing requires
   Calypso to sit in the request path.
-- **Do not rebuild the coding agent.** Wrap or fork OpenCode.
+- **Do not rebuild the coding agent.** Wrap or fork OpenCode. **Done:** forked, as
+  `calypsocode-agent`. The agentic loop and tool use stay upstream's; what the
+  fork adds is the branding and the de-branded wire.
 - **The launcher is a local tool.** It includes no hosted or pooled multi-user
   service. Whether one should exist is a project-direction decision, not a code
   change.
