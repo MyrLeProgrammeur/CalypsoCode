@@ -87,7 +87,7 @@ directory, which the next build erases and recreates.
 **3. oniux**, from the Tor Project — experimental, per its own announcement:
 
 ```sh
-cargo install --git https://gitlab.torproject.org/tpo/core/oniux
+cargo install --git https://gitlab.torproject.org/tpo/core/oniux --tag v0.11.0
 ```
 
 **Check it.** `~/.local/bin` must be on your `PATH` first:
@@ -96,8 +96,9 @@ cargo install --git https://gitlab.torproject.org/tpo/core/oniux
 calypsocode doctor
 ```
 
-`doctor` reports what it checked and what it could not, per profile: `oniux`,
-`calypsocode-agent`, and whether the compartment's key is present. It does not
+`doctor` reports what it checked and what it could not, per profile: `oniux` and
+the exact revision installed, `curl`, `calypsocode-agent`, and whether the
+compartment's key is present. It does not
 conclude that the stack works — that is what the receipt at the end of a real
 session is for.
 
@@ -146,10 +147,13 @@ prompt content, and your session timing.
 
 Everything in [docs/FINDINGS.md](docs/FINDINGS.md) was measured, not assumed:
 
-- `oniux` isolation is fail-closed at the kernel routing level ✅
+- `oniux` isolation is fail-closed at the kernel routing level ✅ — and every
+  session proves it against targets confirmed reachable from the host first,
+  which it did not until 2026-07-26 ⚠️
 - Venice and Tinfoil do **not** block Tor exits ✅
 - Authenticated, billed inference over Tor works — HTTP 200 in 3.0s ✅
-- A real coding session ran end-to-end: 8 round trips, 3.8s mean, 0 failures ✅
+- A real coding session ran end-to-end on the shipped agent: 4 round trips,
+  3.6s mean, 0 failures ✅
 - Distinct SOCKS credentials yield distinct circuits ✅
 - `oniux` injects `ALL_PROXY`, which silently breaks same-namespace loopback ⚠️
 - `XDG_CONFIG_HOME` alone does **not** compartment an agent — data and state
@@ -171,8 +175,10 @@ CalypsoCode's own code is the launcher — profiles, compartments, egress
 verification, the receipt. The coding agent it runs, `calypsocode-agent`, is a
 rebranded fork of [OpenCode](https://github.com/anomalyco/opencode): the same
 agentic loop and tool use, with CalypsoCode's palette and disclosure on top.
-Run `calypsocode-agent --about` for both licenses that apply — OpenCode's
-original (MIT) and CalypsoCode's own changes (AGPL-3.0).
+Run `calypsocode-agent --about` for the attribution. The fork is MIT, like the
+original: the changes are a rebrand plus one header fix, and MIT keeps that fix
+offerable upstream. This launcher is AGPL-3.0 — it is the part worth protecting,
+because it holds the receipt, the leak test and the disclosure.
 
 ## Prior art
 

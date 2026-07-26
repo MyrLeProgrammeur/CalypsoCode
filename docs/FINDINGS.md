@@ -5,7 +5,15 @@ Everything here was **measured**, not assumed. Where something is untested, it
 says so.
 
 Test date: 2026-07-24 · Linux 7.0.0-27-generic · oniux installed via
-`cargo install --git https://gitlab.torproject.org/tpo/core/oniux`.
+`cargo install --git https://gitlab.torproject.org/tpo/core/oniux --tag v0.11.0`.
+
+**The oniux revision matters and is recorded here for that reason.** Every isolation
+finding below — F1, F2, F6, F7, F10, F14 — was measured against
+**oniux 0.11.0, commit `f98d8f5c270a`**. oniux is experimental by its own
+announcement and has no `--version` flag; without pinning, none of these findings is
+reproducible, including by their author after the next `cargo install`. If the
+installed revision differs from this one, treat them as expired rather than as facts.
+`calypsocode doctor` prints what is actually installed.
 
 ---
 

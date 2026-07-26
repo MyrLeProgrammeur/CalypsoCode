@@ -680,11 +680,47 @@ doctor_bin() {
   return 1
 }
 
+# `oniux --version` does not exist, so the revision comes from cargo's own install
+# registry. It matters: every isolation finding in docs/FINDINGS.md was measured
+# against one revision of an experimental tool, and without knowing which, none of
+# them is reproducible — including by their author, after the next `cargo install`.
+oniux_revision() {
+  local reg="${CARGO_HOME:-$HOME/.cargo}/.crates2.json"
+  [ -f "$reg" ] || return 1
+  python3 - "$reg" <<'PY' 2>/dev/null || return 1
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for key in data.get("installs", {}):
+    if key.startswith("oniux "):
+        print(key)
+        break
+else:
+    raise SystemExit(1)
+PY
+}
+
 doctor() {
-  local failed=0
+  local failed=0 rev
 
   echo "checked, on this host:"
-  doctor_bin oniux    "cargo install --git https://gitlab.torproject.org/tpo/core/oniux" || failed=1
+  if [ "$P_NETWORK" = "none" ]; then
+    echo "  n/a   oniux — this profile is NETWORK=none, so nothing isolates it"
+  else
+    if doctor_bin oniux "cargo install --git https://gitlab.torproject.org/tpo/core/oniux --tag v0.11.0"; then
+      if rev="$(oniux_revision)"; then
+        echo "        $rev"
+      else
+        echo "        version unknown — cargo's install registry did not name it, so the"
+        echo "        findings in docs/FINDINGS.md cannot be tied to what is installed"
+      fi
+    else
+      failed=1
+    fi
+  fi
+  # Both the leak test and the egress check are curl. Its absence is otherwise
+  # discovered after the user has already confirmed a launch.
+  doctor_bin curl     "install it with your package manager" || failed=1
   doctor_bin calypsocode-agent "build it: github.com/MyrLeProgrammeur/calypsocode-agent" || failed=1
 
   if [ -f "$PROFILE_FILE" ]; then
