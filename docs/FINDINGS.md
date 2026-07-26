@@ -322,6 +322,83 @@ private addresses discovered on the host and passed in (they are invisible from
 inside); bypass the proxy; and do not test `169.254.42.0/24` — that is onion0's
 own subnet and is legitimately reachable.
 
+## F11 — OpenCode sends a client-identifying `User-Agent` to a generic OpenAI-compatible provider
+
+**Status: confirmed. Measured 2026-07-26, `bin/calypsocode` unmodified, OpenCode 1.18.5.**
+
+This is Batch 1 of `docs/plans/calypsocode-ui-rebrand.md`: does a generic
+OpenAI-compatible provider receive any header that identifies the client?
+Answer, plainly: **yes.**
+
+**Method.** A throwaway local HTTP server (Python `http.server`, not part of
+this repo) logged every request's method, path, and full header set verbatim,
+and answered `/v1/chat/completions` with a minimal valid completion so the
+client would not error out. A throwaway profile pointed a real launch at it:
+
+```
+PROFILE=header-test
+NETWORK=none                          # required — see F1, the namespace can't reach host loopback
+API_KEY_ENV=FAKE_HEADER_TEST_KEY      # exported with a dummy value, no real key
+API_BASE=http://127.0.0.1:8765/v1
+MODEL=placeholder-model
+GIT_NAME=dev
+GIT_EMAIL=dev@localhost
+```
+
+```
+export FAKE_HEADER_TEST_KEY=dummy
+CALYPSO_NETWORK=none ./bin/calypsocode --profile header-test --yes run "hi"
+```
+
+`NETWORK=none` is the only way to run this test — it is not a statement about
+production config.
+
+**Result.** Two `POST /v1/chat/completions` requests reached the server (an
+automatic title-generation call, then the main turn), both carrying identical
+headers:
+
+```
+Authorization: Bearer dummy
+Content-Type: application/json
+User-Agent: opencode/1.18.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14
+x-session-affinity: ses_06437557cffeJnbh5OQ7cGl91r
+x-session-id: ses_06437557cffeJnbh5OQ7cGl91r
+Connection: keep-alive
+Accept: */*
+Host: 127.0.0.1:8765
+Accept-Encoding: gzip, deflate, br, zstd
+Content-Length: <n>
+```
+
+`User-Agent: opencode/1.18.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14`
+is a client-identifying header, sent verbatim, on every request: it names the
+tool, its exact version, the AI SDK version, and the JS runtime version. A
+generic OpenAI-compatible provider — no OpenRouter-style conventions
+involved — receives this on every turn of every session.
+
+`x-session-id` / `x-session-affinity` is a second, weaker signal: a
+random ID, constant across every request of one CLI invocation, that lets
+the provider link that session's requests together server-side. It is
+presumed to change between launches (not verified across multiple launches
+in this test).
+
+**What did not appear.** No `X-Title`, `HTTP-Referer`, or `X-Source` header —
+the specific names named in the plan as things to check for. Those are
+OpenRouter-specific conventions; the generic `@ai-sdk/openai-compatible`
+provider path this profile exercises does not send them. Their absence does
+not make the row safe: the `User-Agent` above is the concrete identifying
+header this test was designed to catch, and it is present.
+
+**Also observed.** OpenCode never called `GET /models` in this run — the
+compartment's generated config supplies the model explicitly
+(`compartment_prepare` in `bin/calypsocode`), so no separate models-list
+request happens.
+
+**Consequence.** Batch 5 of `docs/plans/calypsocode-ui-rebrand.md`
+(de-brand the wire) is necessary, not speculative: the `User-Agent` string is
+a measured, concrete client fingerprint reaching every generic
+OpenAI-compatible provider CalypsoCode talks to.
+
 ---
 
 ## Still untested
@@ -348,3 +425,11 @@ what one session cannot show.
    other than TCP, an interface that appeared after discovery, an address the
    host does not have. It shows the obvious ways out are shut, not that none
    exists.
+5. **Whether the `User-Agent` fingerprint ([F11](#f11--opencode-sends-a-client-identifying-user-agent-to-a-generic-openai-compatible-provider))
+   is stable, and whether it can be removed pre-fork.** One run, one OpenCode
+   version. Not tested: whether the string changes across OpenCode versions or
+   configured providers, whether `x-session-id` actually rotates between
+   launches, and whether it is overridable through OpenCode's own config
+   (`opencode.json` / plugin) without forking at all — Batch 5 assumes a fork
+   is required, but that has not been checked against upstream's config
+   surface.

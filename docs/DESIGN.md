@@ -67,6 +67,21 @@ you need to be linkable.
 The ❌ rows are in scope by the thesis and out of reach in practice. They belong
 in the receipt, stated plainly, every session.
 
+**Client & TLS fingerprint, in detail.** Measured, not assumed: OpenCode sends
+a `User-Agent` header — `opencode/<version> ai-sdk/provider-utils/<version>
+runtime/bun/<version>` — verbatim to every generic OpenAI-compatible provider,
+on every request
+([F11](FINDINGS.md#f11--opencode-sends-a-client-identifying-user-agent-to-a-generic-openai-compatible-provider)).
+No `X-Title`, `HTTP-Referer`, or `X-Source` header was observed — those are
+OpenRouter-specific conventions this generic provider path doesn't use — but
+the `User-Agent` alone is a concrete, verified client fingerprint. That is why
+the row stays ⚠️ partial rather than ✅: the header is a known, now-measured
+gap that the fork's Batch 5
+(`docs/plans/calypsocode-ui-rebrand.md#batch-5--tier-2-de-brand-the-wire-conditional-on-batch-1`)
+removes or neutralises; the TLS/JA3 fingerprint underneath the header is a
+separate, still-untested dimension of "partial" — Calypso changes the network
+path (Tor), not the TLS client stack's own signature.
+
 ### The rule for compartments
 
 **Every signal must change at the same boundary.** A compartment is only as

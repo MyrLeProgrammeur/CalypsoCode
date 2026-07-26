@@ -28,7 +28,7 @@ sandbox_setup() {
   export CALYPSO_HOME="$SANDBOX/home"
   export CALYPSO_STATE_DIR="$SANDBOX/state"
   # The stub dir plus system utilities, and deliberately NOT $ORIGINAL_PATH: a
-  # developer machine has the real opencode and oniux installed, so no_opencode()
+  # developer machine has the real calypsocode-agent and oniux installed, so no_calypsocode_agent()
   # would fall through to the real agent, which waits on its TUI forever. CI
   # never caught it because CI has neither binary.
   export PATH="$SANDBOX/bin:/usr/bin:/bin"
@@ -62,11 +62,11 @@ EOF
 }
 
 # A stub agent that records the environment it was launched with.
-stub_opencode() {
+stub_calypsocode_agent() {
   local exit_code="${1:-0}"
-  cat > "$SANDBOX/bin/opencode" <<EOF
+  cat > "$SANDBOX/bin/calypsocode-agent" <<EOF
 #!/usr/bin/env bash
-echo "STUB_OPENCODE_RAN args=\$*"
+echo "STUB_CALYPSOCODE_AGENT_RAN args=\$*"
 for v in LC_ALL LANG TZ GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME \\
          GIT_COMMITTER_EMAIL XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \\
          OPENCODE_CONFIG TEST_KEY; do
@@ -74,11 +74,11 @@ for v in LC_ALL LANG TZ GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME \\
 done
 exit $exit_code
 EOF
-  chmod +x "$SANDBOX/bin/opencode"
+  chmod +x "$SANDBOX/bin/calypsocode-agent"
 }
 
 # Removes the agent from PATH, simulating "not installed".
-no_opencode() { rm -f "$SANDBOX/bin/opencode"; }
+no_calypsocode_agent() { rm -f "$SANDBOX/bin/calypsocode-agent"; }
 
 # Runs the command it is given, in this namespace. Enough to exercise the whole
 # inner script without Tor: what oniux adds is isolation, and isolation is what
@@ -135,7 +135,7 @@ EOF
 
 # The full set for an isolated-namespace launch: agent, oniux, ip, curl.
 stub_namespace() {
-  stub_opencode
+  stub_calypsocode_agent
   stub_oniux
   stub_ip
   stub_curl

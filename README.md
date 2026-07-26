@@ -113,6 +113,15 @@ choose. [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) states what is and isn't
 covered, including the two things that cannot be removed: your account, and
 your writing style. Read it before trusting this tool for anything.
 
+## The agent
+
+CalypsoCode's own code is the launcher — profiles, compartments, egress
+verification, the receipt. The coding agent it runs, `calypsocode-agent`, is a
+rebranded fork of [OpenCode](https://github.com/anomalyco/opencode): the same
+agentic loop and tool use, with CalypsoCode's palette and disclosure on top.
+Run `calypsocode-agent --about` for both licenses that apply — OpenCode's
+original (MIT) and CalypsoCode's own changes (AGPL-3.0).
+
 ## Prior art
 
 [oniux](https://gitlab.torproject.org/tpo/core/oniux) does the network

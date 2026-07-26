@@ -288,12 +288,14 @@ json_escape() {
 # The agent config Calypso derives from the profile. Regenerated on every
 # launch, because it must always match the profile it claims to implement.
 # Anything the user wants to add for this compartment goes in
-# $COMPARTMENT_DIR/opencode/opencode.json, which is never written here.
+# $COMPARTMENT_DIR/calypsocode-agent/opencode.json, which is never written
+# here (the agent's own per-app config directory follows its `app` constant —
+# calypsocode-agent — the on-disk file name it looks for there is unchanged).
 compartment_prepare() {
   COMPARTMENT_DIR="$CALYPSO_HOME/compartments/$P_PROFILE"
   OPENCODE_CONFIG_FILE="$COMPARTMENT_DIR/opencode.calypso.json"
 
-  mkdir -p "$COMPARTMENT_DIR/opencode" "$COMPARTMENT_DIR/data" "$COMPARTMENT_DIR/state"
+  mkdir -p "$COMPARTMENT_DIR/calypsocode-agent" "$COMPARTMENT_DIR/data" "$COMPARTMENT_DIR/state"
 
   local base model key_env
   base="$(json_escape "$P_API_BASE")"
@@ -556,7 +558,7 @@ doctor() {
 
   echo "checked, on this host:"
   doctor_bin oniux    "cargo install --git https://gitlab.torproject.org/tpo/core/oniux" || failed=1
-  doctor_bin opencode "curl -fsSL https://opencode.ai/install | bash" || failed=1
+  doctor_bin calypsocode-agent "build it: github.com/MyrLeProgrammeur/calypsocode-agent" || failed=1
 
   if [ -f "$PROFILE_FILE" ]; then
     echo "  ok    profile '$P_PROFILE' parsed — $PROFILE_FILE"
@@ -690,10 +692,11 @@ export GIT_COMMITTER_NAME="$P_GIT_NAME"
 export GIT_COMMITTER_EMAIL="$P_GIT_EMAIL"
 export XDG_CONFIG_HOME="$COMPARTMENT_DIR"
 export OPENCODE_CONFIG="$OPENCODE_CONFIG_FILE"
-# Config alone is not the compartment. Measured: with only XDG_CONFIG_HOME set,
-# OpenCode still resolved data and state to the shared ~/.local/share/opencode
-# and ~/.local/state/opencode — session history and stored credentials would
-# cross between compartments. Every signal has to move at the same boundary.
+# Config alone is not the compartment. Measured (F9): with only
+# XDG_CONFIG_HOME set, the agent still resolved data and state to the shared
+# ~/.local/share/calypsocode-agent and ~/.local/state/calypsocode-agent —
+# session history and stored credentials would cross between compartments.
+# Every signal has to move at the same boundary.
 export XDG_DATA_HOME="$COMPARTMENT_DIR/data"
 export XDG_STATE_HOME="$COMPARTMENT_DIR/state"
 # The profile names the variable rather than holding the key; exporting it by
@@ -830,8 +833,8 @@ else
   echo "calypsocode: this session's traffic leaves via Tor." >&2
 fi
 
-if ! command -v opencode >/dev/null 2>&1; then
-  echo "calypsocode: opencode not found — curl -fsSL https://opencode.ai/install | bash" >&2
+if ! command -v calypsocode-agent >/dev/null 2>&1; then
+  echo "calypsocode: calypsocode-agent not found — build it: github.com/MyrLeProgrammeur/calypsocode-agent" >&2
   exit 127
 fi
 
@@ -841,7 +844,7 @@ if [ -n "${CALYPSO_STARTED_FILE:-}" ]; then
   : > "$CALYPSO_STARTED_FILE"
 fi
 
-exec opencode "$@"
+exec calypsocode-agent "$@"
 INNER_EOF
 )
 

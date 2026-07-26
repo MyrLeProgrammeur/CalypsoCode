@@ -13,16 +13,16 @@ launch() {
 
 test_missing_key_refuses_to_launch() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   launch
   assert_status 1
   assert_contains "TEST_KEY is empty or unset"
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 test_identity_environment_reaches_the_agent() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   assert_status 0
   assert_contains "ENV LC_ALL=C"
@@ -39,7 +39,7 @@ test_identity_environment_reaches_the_agent() {
 # session history and stored credentials cross between compartments.
 test_all_compartment_paths_move_together() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   assert_status 0
   assert_contains "ENV XDG_CONFIG_HOME=$CALYPSO_HOME/compartments/testbox"
@@ -49,15 +49,15 @@ test_all_compartment_paths_move_together() {
 
 test_agent_arguments_are_passed_through() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch run "fix the bug"
   assert_status 0
-  assert_contains "STUB_OPENCODE_RAN args=run fix the bug"
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN args=run fix the bug"
 }
 
 test_generated_agent_config_matches_the_profile() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
   assert_file_exists "$cfg"
@@ -70,7 +70,7 @@ test_generated_agent_config_matches_the_profile() {
 # The key must never be written into a config file that lives on disk.
 test_generated_config_never_contains_the_key_value() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=super-secret-value launch
   local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
   grep -q "super-secret-value" "$cfg" && _fail "the API key value was written to disk"
@@ -79,7 +79,7 @@ test_generated_config_never_contains_the_key_value() {
 
 test_none_mode_warns_that_there_is_no_isolation() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   assert_contains "WARNING"
   assert_contains "No isolation"
@@ -87,22 +87,22 @@ test_none_mode_warns_that_there_is_no_isolation() {
 
 test_missing_agent_fails_clearly() {
   write_profile
-  no_opencode
+  no_calypsocode_agent
   TEST_KEY=k launch
   assert_status 127
-  assert_contains "opencode not found"
+  assert_contains "calypsocode-agent not found"
 }
 
 test_agent_exit_status_is_propagated() {
   write_profile
-  stub_opencode 42
+  stub_calypsocode_agent 42
   TEST_KEY=k launch
   assert_status 42
 }
 
 test_startup_check_reports_what_will_be_used() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   assert_contains "compartment 'testbox'"
   assert_contains "git identity   dev <dev@localhost>"
@@ -113,17 +113,17 @@ test_startup_check_reports_what_will_be_used() {
 # rather than hang or silently proceed.
 test_no_tty_without_yes_refuses() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   OUTPUT="$(CALYPSO_NETWORK=none TEST_KEY=k "$CALYPSO_BIN" --profile default < /dev/null 2>&1)"
   STATUS=$?
   assert_status 1
   assert_contains "not a terminal"
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 test_invalid_network_override_is_refused() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   CALYPSO_NETWORK=carrier-pigeon TEST_KEY=k run_calypso --profile default --yes
   assert_status 1
   assert_contains "accepted values: tor, none"
@@ -131,20 +131,20 @@ test_invalid_network_override_is_refused() {
 
 test_help_and_doctor_do_not_launch() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   run_calypso --help
   assert_status 0
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 
   TEST_KEY=k run_calypso doctor
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 # The original doctor printed "everything is ready" because three binaries
 # existed, while the tool could not run at all. It must never assert again.
 test_doctor_does_not_claim_readiness() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k run_calypso doctor
   assert_not_contains "everything is ready"
   assert_contains "not checked:"

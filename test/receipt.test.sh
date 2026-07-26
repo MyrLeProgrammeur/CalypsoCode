@@ -12,7 +12,7 @@ launch() {
 
 test_completed_session_leaves_a_receipt() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   assert_status 0
   assert_equals "$(receipt_count)" "1"
@@ -22,7 +22,7 @@ test_completed_session_leaves_a_receipt() {
 # it is the only honest thing left to do, so the count has to be right.
 test_receipt_counts_the_session() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   case "$(receipt_body)" in
     *"session 1 in this compartment since"*) ;;
@@ -32,7 +32,7 @@ test_receipt_counts_the_session() {
 
 test_the_count_rises_across_sessions() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   TEST_KEY=k launch
   TEST_KEY=k launch
@@ -46,12 +46,12 @@ test_the_count_rises_across_sessions() {
 # any more than it writes a receipt.
 test_a_refused_launch_does_not_count() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
-  no_opencode
+  no_calypsocode_agent
   TEST_KEY=k launch            # refused: exit 127, no session
   assert_status 127
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   case "$(receipt_body)" in
     *"session 2 in this compartment since"*) ;;
@@ -63,7 +63,7 @@ test_each_compartment_counts_separately() {
   write_profile
   write_profile other "PROFILE=otherbox" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
     "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@localhost"
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   TEST_KEY=k launch
   TEST_KEY=k CALYPSO_NETWORK=none run_calypso --profile other --yes
@@ -75,7 +75,7 @@ test_each_compartment_counts_separately() {
 
 test_receipt_states_what_was_not_removed() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   local body; body="$(receipt_body)"
   case "$body" in *"NOT removed"*) ;; *) _fail "receipt omits the NOT-removed block" "$body" ;; esac
@@ -86,7 +86,7 @@ test_receipt_states_what_was_not_removed() {
 
 test_receipt_names_the_compartment_and_identity() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   local body; body="$(receipt_body)"
   case "$body" in *"compartment:  testbox"*) ;; *) _fail "receipt omits compartment" "$body" ;; esac
@@ -95,7 +95,7 @@ test_receipt_names_the_compartment_and_identity() {
 
 test_receipt_never_contains_the_key_value() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=super-secret-value launch
   case "$(receipt_body)" in
     *super-secret-value*) _fail "the API key value leaked into the receipt" ;;
@@ -105,7 +105,7 @@ test_receipt_never_contains_the_key_value() {
 
 test_none_mode_receipt_admits_there_was_no_isolation() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   case "$(receipt_body)" in
     *"network:      none"*) return 0 ;;
@@ -118,7 +118,7 @@ test_none_mode_receipt_admits_there_was_no_isolation() {
 # happened.
 test_no_receipt_when_the_agent_never_started() {
   write_profile
-  no_opencode
+  no_calypsocode_agent
   TEST_KEY=k launch
   assert_status 127
   assert_equals "$(receipt_count)" "0"
@@ -127,7 +127,7 @@ test_no_receipt_when_the_agent_never_started() {
 
 test_no_receipt_when_the_key_is_missing() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   launch
   assert_status 1
   assert_equals "$(receipt_count)" "0"
@@ -135,7 +135,7 @@ test_no_receipt_when_the_key_is_missing() {
 
 test_no_receipt_for_profile_or_doctor() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k run_calypso profile
   TEST_KEY=k run_calypso doctor
   assert_equals "$(receipt_count)" "0"
@@ -143,7 +143,7 @@ test_no_receipt_for_profile_or_doctor() {
 
 test_marker_files_are_cleaned_up() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   TEST_KEY=k launch
   local leftovers
   leftovers="$(find "$SANDBOX/state" -maxdepth 1 -name '.egress-*' -o -maxdepth 1 -name '.started-*' 2>/dev/null | wc -l | tr -d ' ')"
@@ -159,12 +159,12 @@ test_marker_files_are_cleaned_up() {
 _signal_test() {
   local sig="$1" want_status="$2"
   write_profile
-  cat > "$SANDBOX/bin/opencode" <<'EOF'
+  cat > "$SANDBOX/bin/calypsocode-agent" <<'EOF'
 #!/usr/bin/env bash
-echo "STUB_OPENCODE_RAN"
+echo "STUB_CALYPSOCODE_AGENT_RAN"
 sleep 3
 EOF
-  chmod +x "$SANDBOX/bin/opencode"
+  chmod +x "$SANDBOX/bin/calypsocode-agent"
 
   # Job control matters here. Without `set -m`, a background job started by a
   # non-interactive shell inherits SIGINT as ignored, so no trap can fire and
@@ -177,7 +177,7 @@ EOF
   set +m
 
   local waited=0
-  while ! grep -q STUB_OPENCODE_RAN "$SANDBOX/out" 2>/dev/null; do
+  while ! grep -q STUB_CALYPSOCODE_AGENT_RAN "$SANDBOX/out" 2>/dev/null; do
     sleep 0.2
     waited=$((waited + 1))
     [ "$waited" -gt 50 ] && break
@@ -201,12 +201,12 @@ test_sigterm_still_writes_exactly_one_receipt() { _signal_test TERM 143; }
 _direct_signal_test() {
   local sig="$1" want_status="$2"
   write_profile
-  cat > "$SANDBOX/bin/opencode" <<'EOF'
+  cat > "$SANDBOX/bin/calypsocode-agent" <<'EOF'
 #!/usr/bin/env bash
-echo "STUB_OPENCODE_RAN"
+echo "STUB_CALYPSOCODE_AGENT_RAN"
 sleep 3
 EOF
-  chmod +x "$SANDBOX/bin/opencode"
+  chmod +x "$SANDBOX/bin/calypsocode-agent"
 
   set -m
   CALYPSO_NETWORK=none TEST_KEY=k "$CALYPSO_BIN" --profile default --yes > "$SANDBOX/out" 2>&1 &
@@ -214,7 +214,7 @@ EOF
   set +m
 
   local waited=0
-  while ! grep -q STUB_OPENCODE_RAN "$SANDBOX/out" 2>/dev/null; do
+  while ! grep -q STUB_CALYPSOCODE_AGENT_RAN "$SANDBOX/out" 2>/dev/null; do
     sleep 0.2
     waited=$((waited + 1))
     [ "$waited" -gt 50 ] && break
