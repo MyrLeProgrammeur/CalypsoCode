@@ -91,7 +91,7 @@ test_tor_is_offered_as_installed_but_unverified() {
 
 test_tor_is_marked_unavailable_when_oniux_is_missing() {
   have_pty || return 0
-  stub_opencode
+  stub_calypsocode_agent
   stub_ip
   stub_curl
   run_calypso_tty "2

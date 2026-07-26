@@ -19,7 +19,7 @@ test_passes_when_the_lan_is_unreachable() {
   assert_status 0
   assert_contains "leak test passed"
   assert_contains "2 private target(s) unreachable"
-  assert_contains "STUB_OPENCODE_RAN"
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 # The whole point of the test: a reachable private address means the namespace
@@ -31,7 +31,7 @@ test_a_reachable_private_address_refuses_the_launch() {
   assert_status 1
   assert_contains "LEAK DETECTED"
   assert_contains "10.9.9.42"
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 # A refused launch sent nothing, so it is not a session and owes no receipt.
@@ -50,7 +50,7 @@ test_force_unsafe_launches_anyway() {
   assert_status 0
   assert_contains "LEAK DETECTED"
   assert_contains "--force-unsafe given"
-  assert_contains "STUB_OPENCODE_RAN"
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 # Forcing past a leak must be visible afterwards, not only in the terminal
@@ -76,21 +76,21 @@ test_force_unsafe_cannot_come_from_the_environment() {
   CALYPSO_FORCE_UNSAFE=1 STUB_CURL_REACHABLE=10.9.9.42 launch
   assert_status 1
   assert_contains "LEAK DETECTED"
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 # A test that could not run is not a test that passed — the mistake the first
 # doctor made, and the reason it must never be repeated here.
 test_no_discoverable_target_refuses_the_launch() {
   write_profile
-  stub_opencode
+  stub_calypsocode_agent
   stub_oniux
   stub_ip_empty
   stub_curl
   launch
   assert_status 1
   assert_contains "no private addresses were found"
-  assert_not_contains "STUB_OPENCODE_RAN"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 test_receipt_records_a_passed_leak_test() {
