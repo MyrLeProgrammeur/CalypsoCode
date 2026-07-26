@@ -131,7 +131,23 @@ for arg in "$@"; do
   case "$arg" in http://*|https://*) url="$arg" ;; esac
 done
 case "$url" in
-  *check.torproject.org*) echo '{"IsTor":true,"IP":"185.220.101.1"}'; exit 0 ;;
+  *check.torproject.org*)
+    # The egress check, driven by:
+    #   STUB_EGRESS_ANSWERS   what to echo, verbatim. Default: a Tor exit.
+    #   STUB_EGRESS_FAIL_N    fail this many attempts before answering, so the
+    #                         retry loop can be exercised. Counted in a file
+    #                         because each attempt is a fresh process.
+    if [ -n "${STUB_EGRESS_FAIL_N:-}" ]; then
+      counter="${STUB_EGRESS_COUNTER:-/dev/null}"
+      n=0
+      [ -f "$counter" ] && n="$(cat "$counter")"
+      n=$((n + 1))
+      echo "$n" > "$counter"
+      if [ "$n" -le "$STUB_EGRESS_FAIL_N" ]; then exit 7; fi
+    fi
+    printf '%s\n' "${STUB_EGRESS_ANSWERS-{\"IsTor\":true,\"IP\":\"185.220.101.1\"\}}"
+    exit 0
+    ;;
 esac
 host="${url#http://}"
 host="${host%%/*}"
@@ -163,6 +179,25 @@ stub_namespace() {
   stub_ip
   stub_ss
   stub_curl
+}
+
+# A PATH with no curl on it at all.
+#
+# Deleting $SANDBOX/bin/curl is not enough: the sandbox PATH ends in /usr/bin:/bin, so
+# the lookup falls through to the real one. That is why the "curl is missing" branch
+# was untestable, and why a mutation removing its refusal survived a green suite.
+#
+# The list is the external commands the launcher needs *before* the curl guard fires.
+# It is short because the guard is early and fatal. If a test using this starts failing
+# with "command not found", the guard moved later — which is itself worth knowing.
+stub_no_curl() {
+  mkdir -p "$SANDBOX/nocurl"
+  local c
+  for c in bash env id date mkdir rm cat tr sed awk cut sort head grep timeout uname sleep printf; do
+    [ -x "/usr/bin/$c" ] && ln -sf "/usr/bin/$c" "$SANDBOX/nocurl/$c"
+    [ -x "/bin/$c" ] && ln -sf "/bin/$c" "$SANDBOX/nocurl/$c"
+  done
+  export PATH="$SANDBOX/bin:$SANDBOX/nocurl"
 }
 
 # Listening ports, as `ss -ltn` prints them. Stubbed so the suite never reads the

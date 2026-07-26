@@ -11,9 +11,25 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
+# The suites that must exist. A glob cannot tell "this suite passed" from "this
+# suite is not there": `egress.test.sh` was referenced in a comment for weeks while
+# never existing, so every egress mutation sailed through a green run. A missing
+# suite now fails loudly instead of counting as zero tests.
+EXPECTED_SUITES=(egress launch leak picker profile receipt)
+
 filter="${1:-}"
 failed=0
 ran=0
+
+if [ -z "$filter" ]; then
+  for expected in "${EXPECTED_SUITES[@]}"; do
+    if [ ! -e "test/$expected.test.sh" ]; then
+      echo "test/run.sh: test/$expected.test.sh is missing." >&2
+      echo "test/run.sh: a suite that does not exist is not a suite that passed." >&2
+      exit 1
+    fi
+  done
+fi
 
 for suite in test/*.test.sh; do
   [ -e "$suite" ] || continue

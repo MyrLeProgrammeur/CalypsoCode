@@ -3,7 +3,8 @@
 # start when the compartment is not complete.
 #
 # These run with CALYPSO_NETWORK=none so they need neither Tor nor the network.
-# What `none` skips is egress verification — covered in egress.test.sh.
+# What `none` skips is egress verification, which test/egress.test.sh covers — and
+# did not, for as long as this comment claimed it while the file did not exist.
 # shellcheck source=test/helpers.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helpers.sh"
 

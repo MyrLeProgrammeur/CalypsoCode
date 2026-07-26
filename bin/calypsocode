@@ -857,6 +857,17 @@ rm -f "$EGRESS_FILE" "$STARTED_FILE" "$LEAK_FILE"
 export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
 export CALYPSO_STARTED_FILE="$STARTED_FILE"
 export CALYPSO_LEAK_FILE="$LEAK_FILE"
+# Checked here, on the host, and not only inside the namespace: the host-side
+# confirmation of leak targets needs curl too, and without it every candidate looks
+# unreachable. The user would be told "no target answered" — true, and the wrong
+# diagnosis entirely. The inner check stays as well; either alone catches a missing
+# curl, and the tests assert the property rather than either line.
+if [ "$VERIFY" = "1" ] && ! command -v curl >/dev/null 2>&1; then
+  die "curl not found — it is what confirms a leak target answers at all, and what
+  proves the egress is Tor. Install it, or accept an unverified session with
+  --no-verify."
+fi
+
 LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
 export CALYPSO_LEAK_TARGETS="$LEAK_TARGETS"
 export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
