@@ -67,6 +67,21 @@ test_generated_agent_config_matches_the_profile() {
   grep -q '"model": "calypsocode/test-model"' "$cfg" || _fail "model not from profile"
 }
 
+# The agent's two default outbound paths that are not the provider. Both are refused
+# in two places, and both places are asserted: an env var upstream could rename, and a
+# config key upstream has to honour.
+test_third_party_fetches_are_refused() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch
+  assert_status 0
+  assert_contains "ENV OPENCODE_DISABLE_AUTOUPDATE=1"
+  assert_contains "ENV OPENCODE_DISABLE_MODELS_FETCH=1"
+  local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
+  python3 -m json.tool "$cfg" > /dev/null || _fail "generated config is not valid JSON"
+  grep -q '"autoupdate": false' "$cfg" || _fail "autoupdate is not disabled in the config"
+}
+
 # The path leak Calypso does not fix, so the least it can do is say so. Uses the
 # real username rather than a fixture, because that is what the check reads and a
 # fixture would pass while the real thing broke.

@@ -334,6 +334,7 @@ compartment_prepare() {
 {
   "\$schema": "https://opencode.ai/config.json",
   "model": "calypsocode/$model",
+  "autoupdate": false,
   "provider": {
     "calypsocode": {
       "npm": "@ai-sdk/openai-compatible",
@@ -740,6 +741,19 @@ export XDG_STATE_HOME="$COMPARTMENT_DIR/state"
 # that name is the point. Not passed as an argument — argv is world-readable.
 # shellcheck disable=SC2163
 export "$P_API_KEY_ENV=$API_KEY_VALUE"
+
+# The agent contacts two third parties that are not the provider, by default, on
+# every launch: models.dev (hourly, carrying its own product-and-version token) and
+# a release endpoint for an update check that can replace the binary. Both leave
+# through the same circuit as provider traffic, and the receipt cannot see either —
+# Calypso is not in the request path, so it has no way to report them. Refusing them
+# here is the only place it can be done.
+#
+# Belt and braces on purpose: the environment variables are upstream's own opt-outs
+# and could be renamed, while `autoupdate` in the generated config is a setting
+# upstream has to honour. Neither alone is a guarantee.
+export OPENCODE_DISABLE_AUTOUPDATE=1
+export OPENCODE_DISABLE_MODELS_FETCH=1
 
 # There is no Tor to verify in `none` mode; the warning below is the whole
 # story there.
