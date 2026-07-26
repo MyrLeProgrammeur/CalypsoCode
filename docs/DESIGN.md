@@ -104,13 +104,14 @@ than "the client identifies itself", and that have different evidence:
 - **TLS/JA3 is untested and outside what Calypso changes.** Moving the network
   path to Tor does not alter the TLS client stack's own signature. Nothing here
   addresses it, and nothing here has measured it.
-- **The measurement covers the from-source build, not a compiled binary.** The
-  build script passes `--user-agent=opencode/<version>` to Bun as a compiled-in
-  default (`packages/opencode/script/build.ts`). Whether that surfaces on the
-  wire depends on the SDK setting the header explicitly on every request, which
-  is what the from-source measurement suggests but does not prove for the
-  compiled path. Until a compiled binary is measured against a logging endpoint,
-  treat the ✅ as applying to the build that was tested.
+- ~~The measurement covers the from-source build, not a compiled binary.~~
+  **Settled 2026-07-26.** The build script passes `--user-agent=opencode/<version>`
+  to Bun as a compiled-in default (`packages/opencode/script/build.ts`), so the
+  compiled artifact was the open question.
+  [F15](FINDINGS.md#f15--the-compiled-binary-sends-no-product-token) measured it
+  against a logging endpoint: no product token reaches the wire, because the SDK
+  sets the header explicitly and an explicit header beats Bun's default. The
+  concern was real and the answer is that it does not leak.
 
 ### The rule for compartments
 

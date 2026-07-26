@@ -637,6 +637,58 @@ leaving through onion0" from "refused by the kernel because nothing was there".
   TCP, an interface that appeared after discovery, an address the host does not have. Same
   limit F10 stated, and still true.
 
+## F15 — The compiled binary sends no product token
+
+**Status: confirmed. Measured 2026-07-26.** This closes the open half of what
+`DESIGN.md` claims about fork commit `dbffbc7`, and "Still untested" item 6.
+
+The concern was concrete. `packages/opencode/script/build.ts` passes
+`--user-agent=opencode/${Script.version}` to Bun when compiling, so the compiled
+binary carries a product-and-version token as its default `User-Agent` for every
+`fetch`. [F11](#f11--opencode-sends-a-client-identifying-user-agent-to-a-generic-openai-compatible-provider)
+measured the from-source build and `dbffbc7` fixed that path; nobody had ever observed
+the artifact users actually execute.
+
+**Method**, reusing F11's: a throwaway local HTTP server logging every request's method,
+path and full header set verbatim, answering `/v1/chat/completions` with a minimal valid
+completion. A throwaway profile with `NETWORK=none` — required, because the namespace
+cannot reach host loopback ([F1](#f1--a-host-process-cannot-reach-a-port-bound-inside-oniux))
+— and a dummy key. Run through `bin/calypsocode` against the **compiled** binary,
+version `0.0.0-dev-202607261100`.
+
+**Result.** Two `POST /v1/chat/completions`, both carrying:
+
+```
+Authorization: Bearer dummy
+Content-Type: application/json
+User-Agent: ai-sdk/openai-compatible/2.0.41 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14
+x-session-affinity: ses_060cc1a6bffeLC7vh1ZYgkhB4p
+x-session-id: ses_060cc1a6bffeLC7vh1ZYgkhB4p
+```
+
+**No product token.** The baked-in `--user-agent` does not reach the wire, because the
+SDK sets the header explicitly on every request and an explicit header beats Bun's
+default. What was suspected to leak does not, and it is now measured rather than
+reasoned about.
+
+`x-session-id` / `x-session-affinity` are unchanged from F11 and remain what that entry
+called them: a random ID constant across one invocation, letting a provider link that
+session's requests together. Still not verified to rotate between launches. No
+`GET /models` was made, matching F11.
+
+**Caveats:**
+
+- **This does not verify that `models.dev` and the update check are suppressed.** Those
+  requests go to other hosts, which a local server cannot see, and `NETWORK=none` means
+  there is no namespace to confine them. The launcher setting
+  `OPENCODE_DISABLE_MODELS_FETCH`, `OPENCODE_DISABLE_AUTOUPDATE` and
+  `"autoupdate": false` is asserted by the test suite; that those settings actually
+  stop the traffic is not measured here. Watching connections during a session, or a
+  DNS log, would settle it.
+- One binary, one build. A future build with a different SDK version could differ —
+  the property depends on the SDK setting the header, not on anything this project
+  controls.
+
 ---
 
 ## Still untested
@@ -671,13 +723,11 @@ what one session cannot show.
    (`opencode.json` / plugin) without forking at all — Batch 5 assumes a fork
    is required, but that has not been checked against upstream's config
    surface.
-6. **What the compiled binary actually sends as its `User-Agent`.** The fork stops
-   setting one on the generic provider branch, and the from-source build was
-   measured sending the SDK's default with no product token. But the compile bakes
-   in `--user-agent=opencode/<version>` as Bun's default
-   (`packages/opencode/script/build.ts`), and
-   [F12](#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor)
-   involved no logging endpoint, so the compiled binary's headers have never been
-   observed. Whether the baked-in default ever reaches a provider depends on the
-   SDK setting the header explicitly on every request — likely, unverified.
-   Repeating F11's method against the compiled binary would settle it.
+6. ~~What the compiled binary actually sends as its `User-Agent`.~~ **Closed
+   2026-07-26 by [F15](#f15--the-compiled-binary-sends-no-product-token):** measured
+   against the compiled artifact, and it sends no product token — the baked-in
+   `--user-agent` never reaches the wire because the SDK sets the header explicitly.
+   What replaces it is narrower: the launcher now sets `OPENCODE_DISABLE_MODELS_FETCH`,
+   `OPENCODE_DISABLE_AUTOUPDATE` and `"autoupdate": false`, and the suite asserts it
+   sets them — but **that those settings actually stop the traffic is not measured.**
+   Watching connections during a session, or a DNS log, would settle it.
