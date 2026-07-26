@@ -67,6 +67,40 @@ test_generated_agent_config_matches_the_profile() {
   grep -q '"model": "calypsocode/test-model"' "$cfg" || _fail "model not from profile"
 }
 
+# MODELS exists so the agent's own picker has something to pick from: the
+# generated config used to list exactly one model, which made that picker
+# useless inside a compartment.
+test_extra_models_reach_the_generated_config() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://api.example.invalid/v1" "MODEL=test-model" \
+    "MODELS=second-model, third-model" "GIT_NAME=dev" "GIT_EMAIL=dev@localhost"
+  stub_calypsocode_agent
+  TEST_KEY=k launch --profile testbox
+  local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
+  assert_file_exists "$cfg"
+  python3 -m json.tool "$cfg" > /dev/null || _fail "generated config is not valid JSON"
+  grep -q '"second-model": {}' "$cfg" || _fail "MODELS entry missing from the config"
+  grep -q '"third-model": {}' "$cfg" || _fail "comma-separated MODELS entry missing"
+  # MODEL stays what the session opens on, however many others are offered.
+  grep -q '"model": "calypsocode/test-model"' "$cfg" || _fail "MODEL is no longer the default"
+}
+
+# A model named twice must not produce duplicate JSON keys.
+test_model_repeated_in_models_is_not_duplicated() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://api.example.invalid/v1" "MODEL=test-model" \
+    "MODELS=test-model,other-model" "GIT_NAME=dev" "GIT_EMAIL=dev@localhost"
+  stub_calypsocode_agent
+  TEST_KEY=k launch --profile testbox
+  local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
+  python3 -m json.tool "$cfg" > /dev/null || _fail "generated config is not valid JSON"
+  local n
+  n="$(grep -c '"test-model": {}' "$cfg")"
+  [ "$n" = 1 ] || _fail "test-model listed $n times, expected once"
+}
+
 # The key must never be written into a config file that lives on disk.
 test_generated_config_never_contains_the_key_value() {
   write_profile
