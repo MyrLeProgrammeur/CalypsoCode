@@ -930,7 +930,14 @@ if [ "$VERIFY" = "1" ] && ! command -v curl >/dev/null 2>&1; then
   --no-verify."
 fi
 
-LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
+# Only when the leak test will actually run. Confirming targets means opening a TCP
+# connection to each candidate and waiting on the ones that do not answer, which costs
+# real seconds — spending them for a check that `--no-verify` or `NETWORK=none` has
+# already switched off is work done to reach a conclusion nobody will read.
+LEAK_TARGETS=""
+if [ "$VERIFY" = "1" ]; then
+  LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
+fi
 export CALYPSO_LEAK_TARGETS="$LEAK_TARGETS"
 export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
 
