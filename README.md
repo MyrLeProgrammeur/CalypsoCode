@@ -1,4 +1,9 @@
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/calypsocode-logo-dark.svg">
+  <img alt="CalypsoCode" src="docs/assets/calypsocode-logo-light.svg" width="464">
+</picture>
+
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-8b4cff.svg)](LICENSE)
 
 # CalypsoCode
 
