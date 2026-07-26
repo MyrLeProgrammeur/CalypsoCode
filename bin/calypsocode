@@ -227,6 +227,7 @@ profile_load() {
   fi
 
   local lineno=0 line key value var
+  local -a seen_keys=()
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     line="${line%$'\r'}"
@@ -247,6 +248,13 @@ profile_load() {
     if ! profile_key_known "$key"; then
       die "$PROFILE_FILE:$lineno: unknown key '$key' (accepted: ${PROFILE_KEYS[*]})"
     fi
+    # Same reason unknown keys are refused: a duplicate resolves silently to the
+    # last one, and a second NETWORK= line would drop a compartment boundary
+    # without a word.
+    case " ${seen_keys[*]:-} " in
+      *" $key "*) die "$PROFILE_FILE:$lineno: '$key' set twice — refusing rather than picking one" ;;
+    esac
+    seen_keys+=("$key")
     printf -v "P_$key" '%s' "$value"
   done < "$PROFILE_FILE"
 
@@ -258,6 +266,20 @@ profile_load() {
   done
 
   : "${P_PROFILE:=$name}"
+
+  # PROFILE names a directory under $CALYPSO_HOME/compartments. A slash or a `..`
+  # walks out of it: two profiles both saying `../shared` resolve to one directory,
+  # sharing config, data and state — the F9 failure this launcher was rewritten to
+  # prevent, reachable by typing a profile name. A slash alone is worse than useless,
+  # because the agent still runs and the receipt path is then unwritable, so a session
+  # sends data and leaves no record of it. Validated after the filename default is
+  # applied, because `--profile a/b` gets here too.
+  case "$P_PROFILE" in
+    *[!A-Za-z0-9._-]* | '' | .* )
+      die "$PROFILE_FILE: PROFILE='$P_PROFILE' — letters, digits, dot, underscore and
+  hyphen only, and not starting with a dot. It names a directory, so a slash or '..'
+  would place this compartment outside the others." ;;
+  esac
 
   case "$P_NETWORK" in
     tor | none) ;;

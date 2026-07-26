@@ -48,6 +48,38 @@ test_missing_required_key_is_refused() {
   assert_contains "missing required key 'GIT_EMAIL'"
 }
 
+# PROFILE names a directory under compartments/. Two profiles that both escape it
+# resolve to the same directory and share config, data and state — F9, reachable by
+# typing. And a session with an unwritable receipt path sends data and records nothing.
+test_profile_name_that_escapes_the_compartment_dir_is_refused() {
+  write_profile default \
+    "PROFILE=../shared" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "outside the others"
+}
+
+test_profile_name_with_a_slash_is_refused() {
+  write_profile default \
+    "PROFILE=client/acme" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "PROFILE='client/acme'"
+}
+
+# Same class of accident as an unknown key, with a worse outcome: a second NETWORK=
+# line silently drops a compartment boundary.
+test_duplicate_key_is_refused() {
+  write_profile default \
+    "NETWORK=tor" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "set twice"
+}
+
 test_unsupported_network_is_refused() {
   write_profile default \
     "NETWORK=vpn" "API_KEY_ENV=TEST_KEY" "API_BASE=https://x.invalid" \
