@@ -124,6 +124,11 @@ as a launch.
 
 ## How it works: configure, don't rewrite
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.png">
+  <img alt="A profile goes in. A receipt comes out. Isolate: a .env profile names the network, the provider's API_BASE, the model, the git identity, and the name of the variable holding the key — never the key itself. Verify: one oniux invocation seals the namespace around an unmodified coding agent; a leak test that must fail and an egress check that Tor must recognise both run from inside, and either failing stops the launch. Attest: a receipt written on exit records the Tor exit, the leak test result and the session timing, and lists what was not removed — the account you pay with, your prompts and your code." src="docs/assets/how-it-works-light.png">
+</picture>
+
 Calypso never inspects or modifies your traffic. Every identifier it removes is
 removed **before the agent starts**, by controlling the environment it runs in:
 
