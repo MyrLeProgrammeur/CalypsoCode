@@ -1,5 +1,11 @@
 # Plan — Repo honesty pass, cleanup, and install
 
+> Executed 2026-07-26, all 8 batches. Batch 1 merged as PR #5, Batch 2 as fork
+> commit `d4cda2e`, Batches 3–8 as PR #6. Two deviations, both recorded in PR #6:
+> `ROADMAP.md:33` keeps `opencode` because it describes the gate as it was run,
+> before the fork existed; `publish.ts` was not renamed because it publishes
+> upstream's AUR package from upstream's own releases.
+
 > Executor: Sonnet or Opus + subagents. Apply the decisions, do not re-litigate
 > them. Unresolved doubt → stop and ask.
 
