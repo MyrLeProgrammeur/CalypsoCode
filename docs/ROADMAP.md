@@ -67,12 +67,16 @@ Everything in v1 is environment configuration. There is no proxy, no traffic
 inspection, and no content rewriting — see
 [the boundary](DESIGN.md#why-this-boundary-and-not-a-wider-one).
 
-1. **Profiles and compartments.** One launch = one namespace = one circuit. One
+1. **Profiles and compartments.** One launch = one namespace — but not one circuit:
+   Tor rotates inside it, measured at three exits in 27 minutes, and whether to hold
+   one is the first of the two open questions below. One
    compartment = one key = one config = one identity, persisting across
    launches. Independent of the gate, immediately useful.
-2. **Identity configuration.** `LC_ALL`, `TZ`, hostname, git author/committer,
+2. **Identity configuration.** `LC_ALL`, `TZ`, git author/committer,
    per-compartment `XDG_CONFIG_HOME`. Each is one line and removes a signal at
-   its source.
+   its source. **Not the hostname** — it was listed here and never implemented;
+   `oniux` offers no UTS namespace, so it would take `unshare --uts` around the
+   launch ([DESIGN](DESIGN.md#every-signal-decided)).
 3. **Startup check.** Once, before anything is sent: is the git identity the
    compartment's? Does the project path contain the OS username? Report, then
    get out of the way.
@@ -93,6 +97,66 @@ Rewriting `bin/calypsocode` is step 1. Drop the host-side health check, drop
 LiteLLM from the default path, and keep the log outside the private `/tmp`. If
 any loopback hop survives, set `NO_PROXY=127.0.0.1,localhost`
 ([F2](FINDINGS.md#f2--oniux-injects-all_proxy-which-breaks-same-namespace-loopback)).
+
+### Two questions step 5 has to answer, with what is already measured
+
+Neither is decided. Both were investigated on 2026-07-26 so that whoever reaches step 5
+starts from evidence rather than from a blank page. Nothing built so far depends on
+either.
+
+**1. Should a compartment hold one Tor circuit, or let it rotate?**
+
+Today it rotates, and that is not a choice anyone made — it is arti's default, unexamined.
+Measured inside a single namespace: **three distinct exits in 27 minutes** (`80.67.172.162`
+→ `45.84.107.172` at ~11 min → `185.220.101.43` at ~22 min). So a two-hour session presents
+one account to the provider from roughly a dozen addresses.
+
+That cuts both ways, which is why it is a question and not a bug. To a fraud system, one
+account hopping between many exits in an afternoon is the classic stolen-credential
+signature — the risk [F4](FINDINGS.md#f4--venice-and-tinfoil-do-not-block-tor-exits)
+names. Holding one exit looks like an ordinary user, and concentrates every request of
+that compartment onto one relay: whoever watches it sees all of the compartment's traffic
+rather than a tenth, and two compartments landing on the same exit become linkable.
+
+The lever is `oniux --arti-config` with `[circuit_timing] max_dirtiness`. **Do not trust
+the config being accepted:** arti silently accepts keys that do not exist — verified by
+feeding it an invented one, which it swallowed without complaint. One run with
+`max_dirtiness = "24 hours"` held the same exit through 13 minutes, where the unconfigured
+run had already rotated at 11; the confirming probe at 20 minutes was lost to a dead
+circuit. **Suggestive, not established.** What would settle it is both configurations
+running in parallel namespaces for 30–40 minutes, which removes the day and the network
+load as explanations.
+
+Per-compartment separation is a different and easier question, already answered:
+[F3](FINDINGS.md#f3--distinct-socks-credentials-give-distinct-circuits) measured that
+distinct SOCKS credentials give distinct circuits, 4 for 4.
+
+The real answer probably differs per provider, and weeks of ordinary use is what would
+inform it — the same measurement [Still untested](FINDINGS.md#still-untested) item 1 has
+been waiting for since the beginning.
+
+**2. Should the launcher support Tor bridges?**
+
+Today `docs/THREAT-MODEL.md` says an observer between you and the provider learns nothing
+except that you use Tor. A bridge removes that last line: with a pluggable transport the
+traffic does not look like Tor at all. That is a capability change, not a refinement.
+
+**arti supports it.** Verified in the installed `oniux` binary: the pluggable-transport
+manager is compiled in (`BridgeConfig`, and the error string `PT binary failed to
+initialise transports`). No transport is bundled — `obfs4`, `snowflake` and `webtunnel`
+appear nowhere in it — because arti spawns an **external** PT binary over the standard
+protocol. None is installed on this machine.
+
+So the cost is one more runtime dependency (`lyrebird` for obfs4, or `snowflake-client`),
+a bridge to obtain, and configuration. **`doctor` would have to check that binary**, or
+this recreates exactly the hole closed on 2026-07-26 when it turned out `curl` — which
+performs both verifications — was never checked.
+
+Two things worth keeping straight if this is picked up. A bridge replaces your guard with
+a relay nobody vetted: the trade against a VPN is real, but it is *contractual*
+traceability you avoid, not the operator seeing your address — the bridge sees it, exactly
+as a VPN would. And Snowflake is harder to block, not unblockable: censors fingerprint its
+STUN/DTLS patterns rather than blocking WebRTC wholesale, and have degraded it in practice.
 
 ## Decisions taken
 

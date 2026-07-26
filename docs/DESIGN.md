@@ -218,7 +218,9 @@ variable; the user exports it from wherever they keep secrets.
 Retirement (`retire: 30d`) and the `vpn` / `direct` / `socks` backends are
 design, not v1 — see [network backends](#network-backends).
 
-One launch = one namespace = one circuit = one key = one config. Nothing
+One launch = one namespace = one key = one config. The circuit is *not* held for
+the launch — Tor rotates it, measured at three exits in 27 minutes
+([ROADMAP step 5](ROADMAP.md#build-order) carries the trade). Nothing
 crosses.
 
 ### Network backends
