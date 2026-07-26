@@ -83,6 +83,55 @@ tool. See [DESIGN.md](DESIGN.md#the-boundary).
   timing analysis by an entity observing both your entry point and the exit
   node — out of reach for a private actor, not necessarily for a state.
 
+## <a name="reading-a-providers-privacy-claims"></a>Reading a provider's privacy claims
+
+Two entries above end the same way: what the provider can read is the provider's
+property, not Calypso's. That is not a dismissal — it is a choice you make when
+you write `MODEL=` in a profile, and it is worth making deliberately. This
+section is how to read the claim. It is not a recommendation, and Calypso
+verifies none of it.
+
+Providers advertise privacy **per model**, not per account. The same key can
+reach a model that logs and a model that cannot be read at all. Four levels
+recur, and the gap between the second and the third is the one that matters:
+
+| Level | What it means | Promise or proof |
+|---|---|---|
+| Anonymized | The provider forwards your request to an upstream model host without passing your identity along. The provider still knows it is you. | promise |
+| Private | The provider processes your prompt and does not retain it. Usually described as contract-enforced zero retention. | promise |
+| TEE | The model runs inside a hardware enclave, and the enclave can produce attestation evidence — a signed statement of which code is running inside it. Provider staff cannot read the prompt. | **proof** |
+| E2EE | Your client encrypts before sending; only the attested enclave holds the key. The provider carries ciphertext it cannot open. | **proof** |
+
+**The first two are audit questions, the last two are cryptography.** A
+zero-retention promise can be true, can be broken by a subpoena, and cannot be
+checked from outside. Attestation can be checked. Calypso does not check it
+([why](ROADMAP.md#decisions-taken)) — but the evidence exists and is yours to
+verify, which is a different situation from having only a policy page.
+
+Three things measured while choosing a model for the gate
+([F12](FINDINGS.md#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor)),
+each of which will bite anyone doing the same:
+
+- **A privacy level says nothing about whether an agent can use the model.** A
+  coding agent needs tool use — the mechanism by which the model asks for a file
+  to be written or a command run. Plenty of strongly-private models do not
+  support it, and they fail on the first turn with a message about `tools`, not
+  about privacy. Check both.
+- **Strong privacy does not have to cost more.** Assuming it does is how you end
+  up on an expensive model for no gain. Prices vary by more than an order of
+  magnitude *within* the same privacy level.
+- **Prompt caching is the real cost variable, and it is not universal.** Every
+  turn resends the whole conversation, so on a long session the provider's cached
+  input price dominates the bill. Some models offer no cached tier at all. A
+  model with no cache can cost several times one with it, at the same privacy
+  level and the same nominal input price.
+
+**E2EE through an OpenAI-compatible client is not what it sounds like.** True
+end-to-end means *your* side encrypts. A generic OpenAI-compatible agent sends
+plaintext, and an E2EE-capable endpoint will still answer it — so what you
+actually get is the enclave, not the sealed envelope. The stronger half needs a
+client that encrypts, which this agent does not do.
+
 ## Beyond this, it's on you
 
 ### Keep your username out of your paths

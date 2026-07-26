@@ -469,6 +469,84 @@ compiled one, which is what ruled out the compile as the cause.
 path, the compiled binary, the leak test, the egress check and the receipt all
 work together in one real session.
 
+## F13 — Of 106 Venice models, 3 are usable by an agent, strongly private, and cached
+
+**Status: confirmed. Measured 2026-07-26** against `GET /models` over Tor, and by
+running the F12 task on three of them.
+
+The question was which model a compartment should name. Privacy level alone does
+not answer it, and picking on privacy alone produces a profile that cannot work.
+
+**The counts.** Venice advertises privacy per model, in `model_spec`. Of 106:
+
+| Filter | Count |
+|---|---|
+| `supportsE2EE` **and** `supportsTeeAttestation` | 16 (the same 16) |
+| `supportsFunctionCalling` | 94 |
+| Both of the above | **6** |
+| ...of which priced for cached input | **3** |
+
+The three: `e2ee-deepseek-v4-flash`, `e2ee-qwen3-6-27b`, `e2ee-qwen3-6-35b-a3b`.
+They are not a tier ladder — two labs, and no price/capability gradient. The
+cheapest output of the three also has the largest context.
+
+**Tool use is the filter that matters first.** `e2ee-glm-5-1` has both privacy
+capabilities and reads as an ideal choice. It rejects a coding agent outright:
+
+```
+{"issues":[{"message":"tool_choice is not supported by this model"},
+           {"message":"tools is not supported by this model"}]}
+```
+
+The session fails before any inference, after the leak test and egress check have
+already passed — so the failure looks like a Calypso problem and is not one.
+
+**Cached input, not privacy, drives the bill.** Same F12 task, same launcher,
+costs computed from published pricing (not from billing — see the caveat):
+
+| Model | TEE/E2EE | Fresh in | Cached in | Out | Est. cost | Wall |
+|---|---|---|---|---|---|---|
+| `zai-org-glm-5-1` | no | 14,850 | 43,636 | 268 | $0.037 | 19s |
+| `e2ee-glm-5-2-p` | yes | 58,355 | 192 | 285 | $0.104 | 27s |
+| `e2ee-deepseek-v4-flash` | yes | 30,793 | 29,952 | 444 | $0.0069 | 34s |
+| `e2ee-deepseek-v4-flash` (2nd run) | yes | 16,118 | 44,544 | 635 | $0.0049 | 35s |
+
+The strongly-private `deepseek-v4-flash` is **~7× cheaper** than the
+non-private model it replaced, and ~21× cheaper than `e2ee-glm-5-2-p`. Strong
+privacy did not cost more here; choosing the one model of the six with no cached
+tier did.
+
+`e2ee-glm-5-2-p` has no `cache_input` price and read 192 cached tokens across a
+whole session, which is two independent signals that it does not cache. Caching
+works *within* one session, not only across sessions: every turn resends the
+conversation, so turns 2+ read what turn 1 cached. That is why a missing cache
+tier is expensive rather than merely suboptimal.
+
+**E2EE is not obtained by naming an E2EE model.** A plain OpenAI-compatible
+`POST /chat/completions` with a plaintext body to `e2ee-glm-5-1` returned HTTP
+200, billed, with `"enable_e2ee": true` echoed in `venice_parameters`. The
+plaintext was sent and accepted. `enable_e2ee` in a response is a parameter echo,
+not evidence of encryption. What a generic client gets from these models is the
+attested enclave; the client-side encryption half needs a client that encrypts,
+which this agent is not.
+
+**Caveats:**
+
+- Costs are computed from `model_spec.pricing`, not read from an invoice. The
+  agent records `cost = 0.0` in its own session row even though Venice returns a
+  cost field on a direct request — the fork's generic provider path does not parse
+  it. Actual spend was not verified.
+- One task, one day. Token counts on a real task will differ; the ratio between
+  a cached and an uncached model is the transferable part, not the absolute
+  numbers.
+- `betaModel: true` on all three. Availability may change.
+- No model in the intersection supports vision. Strong privacy, tool use, caching
+  and image input do not currently co-exist at this provider.
+- Whether the attestation evidence these models offer is *valid* was not checked.
+  Verifying a third party's guarantees is out of scope
+  ([ROADMAP](ROADMAP.md#decisions-taken)); this entry records that the evidence is
+  advertised, nothing more.
+
 ---
 
 ## Still untested

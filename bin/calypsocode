@@ -17,7 +17,9 @@ PROFILE_DIR="${CALYPSO_PROFILE_DIR:-$CALYPSO_HOME/profiles}"
 STATE_DIR="${CALYPSO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/calypsocode}"
 
 # Keys accepted in a profile file. Anything else is a typo and is refused.
-PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
+# MODELS is optional: extra models to offer the agent's own picker, beyond
+# MODEL. MODEL stays the default the session opens with.
+PROFILE_KEYS=(PROFILE NETWORK API_KEY_ENV API_BASE MODEL MODELS GIT_NAME GIT_EMAIL)
 PROFILE_REQUIRED=(NETWORK API_KEY_ENV API_BASE MODEL GIT_NAME GIT_EMAIL)
 
 # Filled by profile_load via `printf -v`, one per key above. Declared here so
@@ -28,6 +30,7 @@ P_NETWORK=""
 P_API_KEY_ENV=""
 P_API_BASE=""
 P_MODEL=""
+P_MODELS=""
 P_GIT_NAME=""
 P_GIT_EMAIL=""
 
@@ -268,6 +271,9 @@ profile_show() {
   echo "network:      $P_NETWORK"
   echo "api_base:     $P_API_BASE"
   echo "model:        $P_MODEL"
+  if [ -n "$P_MODELS" ]; then
+    echo "also offered: $(model_list | tail -n +2 | paste -sd , - | sed 's/,/, /g')"
+  fi
   echo "git identity: $P_GIT_NAME <$P_GIT_EMAIL>"
   if [ -n "${!P_API_KEY_ENV:-}" ]; then
     echo "api key:      \$$P_API_KEY_ENV is set"
@@ -277,6 +283,21 @@ profile_show() {
 }
 
 # --- compartment -----------------------------------------------------------
+
+# The models this compartment offers, MODEL first, one per line, de-duplicated.
+# Commas and whitespace both separate: a profile is hand-edited and both will
+# get typed. MODEL leads because the agent opens on the first entry.
+model_list() {
+  local -a words seen=()
+  local m
+  read -ra words <<< "$P_MODEL ${P_MODELS//,/ }"
+  for m in "${words[@]}"; do
+    [ -n "$m" ] || continue
+    case " ${seen[*]:-} " in *" $m "*) continue ;; esac
+    seen+=("$m")
+    printf '%s\n' "$m"
+  done
+}
 
 json_escape() {
   local s="$1"
@@ -297,10 +318,17 @@ compartment_prepare() {
 
   mkdir -p "$COMPARTMENT_DIR/calypsocode-agent" "$COMPARTMENT_DIR/data" "$COMPARTMENT_DIR/state"
 
-  local base model key_env
+  local base model key_env models_json m
   base="$(json_escape "$P_API_BASE")"
   model="$(json_escape "$P_MODEL")"
   key_env="$(json_escape "$P_API_KEY_ENV")"
+
+  models_json=""
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    [ -z "$models_json" ] || models_json+=","$'\n'
+    models_json+="        \"$(json_escape "$m")\": {}"
+  done < <(model_list)
 
   cat > "$OPENCODE_CONFIG_FILE" <<EOF
 {
@@ -315,7 +343,7 @@ compartment_prepare() {
         "apiKey": "{env:$key_env}"
       },
       "models": {
-        "$model": {}
+$models_json
       }
     }
   }
