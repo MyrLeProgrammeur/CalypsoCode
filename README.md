@@ -16,7 +16,8 @@ transmits, and reports per session what it removed and what it did not.
 
 ## The idea
 
-**Calypso erases who is asking. Not what is asked.**
+**CalypsoCode hides your network identity from everyone except the provider you
+pay.**
 
 Whether a provider can *read* your code and prompts is a property of the
 provider you buy from — pick a hardware enclave like Tinfoil if that matters to

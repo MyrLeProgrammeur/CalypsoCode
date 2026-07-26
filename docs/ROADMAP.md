@@ -89,8 +89,9 @@ any loopback hop survives, set `NO_PROXY=127.0.0.1,localhost`
 
 ## Decisions taken
 
-- **The thesis: Calypso erases who is asking, not what is asked.** Content
-  confidentiality is a property of the provider the user chooses.
+- **The thesis: CalypsoCode hides your network identity from everyone except the
+  provider you pay.** Content confidentiality is a property of the provider the
+  user chooses.
 - **No content rewriting.** Not prompts, not code, not tool calls. Two-way
   translation with per-session state, covering every encoding, whose failures
   are silent and whose bugs corrupt user source — rejected as more dangerous

@@ -4,7 +4,8 @@ This document states what `CalypsoCode` protects and what it does not. A
 privacy tool that oversells its guarantees is worse than useless — read this
 before treating anything here as "total" anonymity.
 
-The scope in one line: **Calypso erases who is asking, not what is asked.**
+The scope in one line: **CalypsoCode hides your network identity from everyone
+except the provider you pay.**
 Content confidentiality is a property of the provider you choose, not of this
 tool. See [DESIGN.md](DESIGN.md#the-boundary).
 

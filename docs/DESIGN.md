@@ -1,6 +1,7 @@
-# Design — erasing who is asking
+# Design
 
-> **Calypso erases who is asking. Not what is asked.**
+> **CalypsoCode hides your network identity from everyone except the provider
+> you pay.**
 
 That sentence is the scope. Everything below follows from it.
 
@@ -136,8 +137,8 @@ and a service operator, which is
 
 So the honest form of the thesis:
 
-> Calypso erases everything about who is asking, except the account you pay
-> with — and gives you the tools to keep those accounts separate.
+> CalypsoCode hides your network identity from everyone except the provider you
+> pay — and gives you the tools to keep those accounts separate.
 
 ---
 

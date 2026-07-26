@@ -114,9 +114,10 @@ did, and it was wrong the entire time the tool could not run at all.
 
 Explicitly **out of scope** (see [docs/ROADMAP.md](docs/ROADMAP.md#decisions-taken)):
 
-- **Content rewriting of any kind** — prompts, code, or tool calls. Calypso
-  erases who is asking, not what is asked. Two-way translation with per-session
-  state fails silently and can corrupt a user's source.
+- **Content rewriting of any kind** — prompts, code, or tool calls. CalypsoCode
+  hides your network identity from everyone except the provider you pay; what is
+  asked is not its business. Two-way translation with per-session state fails
+  silently and can corrupt a user's source.
 - **Filesystem mounts and path remapping.** Considered and dropped; the leak it
   addressed is handled by user-side convention.
 - **Verifying other providers' guarantees** (enclave attestation, no-logging
