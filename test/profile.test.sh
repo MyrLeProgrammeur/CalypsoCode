@@ -48,6 +48,72 @@ test_missing_required_key_is_refused() {
   assert_contains "missing required key 'GIT_EMAIL'"
 }
 
+# PROFILE names a directory under compartments/. Two profiles that both escape it
+# resolve to the same directory and share config, data and state — F9, reachable by
+# typing. And a session with an unwritable receipt path sends data and records nothing.
+test_profile_name_that_escapes_the_compartment_dir_is_refused() {
+  write_profile default \
+    "PROFILE=../shared" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "outside the others"
+}
+
+test_profile_name_with_a_slash_is_refused() {
+  write_profile default \
+    "PROFILE=client/acme" "NETWORK=tor" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "PROFILE='client/acme'"
+}
+
+# Same class of accident as an unknown key, with a worse outcome: a second NETWORK=
+# line silently drops a compartment boundary.
+test_duplicate_key_is_refused() {
+  write_profile default \
+    "NETWORK=tor" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile
+  assert_status 1
+  assert_contains "set twice"
+}
+
+# The picker's design rests on there never being a second place a backend choice can
+# hide. An inspection command showing the file's value while an override is in force
+# is that same bug in miniature.
+test_profile_reports_the_effective_network_not_the_file() {
+  write_profile
+  CALYPSO_NETWORK=none run_calypso profile
+  assert_status 0
+  assert_contains "network:      none"
+  assert_contains "overridden for this run"
+  assert_contains "the profile says tor"
+}
+
+test_profile_reports_the_file_when_there_is_no_override() {
+  write_profile
+  run_calypso profile
+  assert_status 0
+  assert_contains "network:      tor"
+  assert_not_contains "overridden"
+}
+
+# `trim` strips whitespace at the edges only, so an interior tab reaches the generated
+# config and, unescaped, produces JSON the agent cannot parse — an opaque agent error
+# standing in for a profile typo.
+test_a_tab_inside_a_value_still_produces_valid_json() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=mo	del" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --yes
+  assert_status 0
+  local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
+  python3 -m json.tool "$cfg" > /dev/null || _fail "a tab in a profile value broke the config"
+}
+
 test_unsupported_network_is_refused() {
   write_profile default \
     "NETWORK=vpn" "API_KEY_ENV=TEST_KEY" "API_BASE=https://x.invalid" \

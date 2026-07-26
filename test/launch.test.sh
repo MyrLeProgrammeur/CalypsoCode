@@ -3,7 +3,8 @@
 # start when the compartment is not complete.
 #
 # These run with CALYPSO_NETWORK=none so they need neither Tor nor the network.
-# What `none` skips is egress verification — covered in egress.test.sh.
+# What `none` skips is egress verification, which test/egress.test.sh covers — and
+# did not, for as long as this comment claimed it while the file did not exist.
 # shellcheck source=test/helpers.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helpers.sh"
 
@@ -65,6 +66,21 @@ test_generated_agent_config_matches_the_profile() {
   grep -q '"baseURL": "https://api.example.invalid/v1"' "$cfg" || _fail "baseURL not from profile"
   grep -q '"apiKey": "{env:TEST_KEY}"' "$cfg" || _fail "apiKey should reference the env var by name"
   grep -q '"model": "calypsocode/test-model"' "$cfg" || _fail "model not from profile"
+}
+
+# The agent's two default outbound paths that are not the provider. Both are refused
+# in two places, and both places are asserted: an env var upstream could rename, and a
+# config key upstream has to honour.
+test_third_party_fetches_are_refused() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch
+  assert_status 0
+  assert_contains "ENV OPENCODE_DISABLE_AUTOUPDATE=1"
+  assert_contains "ENV OPENCODE_DISABLE_MODELS_FETCH=1"
+  local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
+  python3 -m json.tool "$cfg" > /dev/null || _fail "generated config is not valid JSON"
+  grep -q '"autoupdate": false' "$cfg" || _fail "autoupdate is not disabled in the config"
 }
 
 # The path leak Calypso does not fix, so the least it can do is say so. Uses the

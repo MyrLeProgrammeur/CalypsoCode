@@ -30,9 +30,11 @@ tool. See [DESIGN.md](DESIGN.md#the-boundary).
 - **Accidental network leaks.** Unlike an `HTTPS_PROXY` export that programs can
   ignore, namespace isolation is fail-closed at the kernel routing level even if
   the wrapped program misbehaves. This is the strongest property in the stack.
-- **Machine and account metadata.** Locale, timezone, hostname, git author
-  identity, and your agent's global config are set or replaced per compartment
-  before launch, so the identifying values are never produced.
+- **Machine and account metadata.** Locale, timezone, git author identity, and your
+  agent's global config are set or replaced per compartment before launch, so the
+  identifying values are never produced. **Not the hostname** — this document listed
+  it here until 2026-07-26 and the launcher has never set it
+  ([why](DESIGN.md#every-signal-decided)).
 - **Cross-project linkage.** Compartments bind one key to one circuit to one
   config, so a breach of one does not expose the others.
 
@@ -162,6 +164,12 @@ A shared default makes everyone look alike, which is the point.
 - Keep compartments genuinely separate. Opening client A's repo inside client
   B's profile defeats the design — the content links them even when the key and
   circuit do not.
+- **Do not run two sessions of the same compartment at once.** They share one
+  compartment directory and therefore one agent state tree, and the session counter
+  in the receipt will lose one of the two. This is documented rather than locked
+  deliberately: a lock file would fix the counter and not the shared state, at the
+  cost of three new ways to fail. Different compartments in parallel are fine — that
+  is what compartments are.
 - Name your project folders with the knowledge that those names are
   transmitted. `client-acme` will be sent; that is your choice to make.
 - Stay mindful of what you write in your prompts. Calypso does not touch them.

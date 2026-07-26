@@ -227,6 +227,7 @@ profile_load() {
   fi
 
   local lineno=0 line key value var
+  local -a seen_keys=()
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     line="${line%$'\r'}"
@@ -247,6 +248,13 @@ profile_load() {
     if ! profile_key_known "$key"; then
       die "$PROFILE_FILE:$lineno: unknown key '$key' (accepted: ${PROFILE_KEYS[*]})"
     fi
+    # Same reason unknown keys are refused: a duplicate resolves silently to the
+    # last one, and a second NETWORK= line would drop a compartment boundary
+    # without a word.
+    case " ${seen_keys[*]:-} " in
+      *" $key "*) die "$PROFILE_FILE:$lineno: '$key' set twice — refusing rather than picking one" ;;
+    esac
+    seen_keys+=("$key")
     printf -v "P_$key" '%s' "$value"
   done < "$PROFILE_FILE"
 
@@ -259,6 +267,20 @@ profile_load() {
 
   : "${P_PROFILE:=$name}"
 
+  # PROFILE names a directory under $CALYPSO_HOME/compartments. A slash or a `..`
+  # walks out of it: two profiles both saying `../shared` resolve to one directory,
+  # sharing config, data and state — the F9 failure this launcher was rewritten to
+  # prevent, reachable by typing a profile name. A slash alone is worse than useless,
+  # because the agent still runs and the receipt path is then unwritable, so a session
+  # sends data and leaves no record of it. Validated after the filename default is
+  # applied, because `--profile a/b` gets here too.
+  case "$P_PROFILE" in
+    *[!A-Za-z0-9._-]* | '' | .* )
+      die "$PROFILE_FILE: PROFILE='$P_PROFILE' — letters, digits, dot, underscore and
+  hyphen only, and not starting with a dot. It names a directory, so a slash or '..'
+  would place this compartment outside the others." ;;
+  esac
+
   case "$P_NETWORK" in
     tor | none) ;;
     *) die "$PROFILE_FILE: NETWORK='$P_NETWORK' — v1 accepts 'tor' or 'none'" ;;
@@ -268,7 +290,15 @@ profile_load() {
 profile_show() {
   echo "profile:      $P_PROFILE"
   echo "file:         $PROFILE_FILE"
-  echo "network:      $P_NETWORK"
+  # The effective value, not the file's. An override in force and a report showing
+  # the profile's own setting is a backend choice hiding in a second place, which is
+  # exactly what the picker refuses to allow.
+  if [ "${NETWORK:-$P_NETWORK}" != "$P_NETWORK" ]; then
+    echo "network:      ${NETWORK:-$P_NETWORK} — overridden for this run by \$CALYPSO_NETWORK"
+    echo "              (the profile says $P_NETWORK)"
+  else
+    echo "network:      $P_NETWORK"
+  fi
   echo "api_base:     $P_API_BASE"
   echo "model:        $P_MODEL"
   if [ -n "$P_MODELS" ]; then
@@ -303,6 +333,12 @@ json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
+  # Interior tabs and newlines survive `trim`, which only strips the edges, and an
+  # unescaped one produces a config the agent cannot parse — surfacing as an opaque
+  # agent error rather than as the profile typo it is.
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
   printf '%s' "$s"
 }
 
@@ -334,6 +370,7 @@ compartment_prepare() {
 {
   "\$schema": "https://opencode.ai/config.json",
   "model": "calypsocode/$model",
+  "autoupdate": false,
   "provider": {
     "calypsocode": {
       "npm": "@ai-sdk/openai-compatible",
@@ -377,11 +414,59 @@ os_username() { id -un; }
 # from failing the function: under `set -o pipefail` a filter that matches
 # nothing, or a missing `ip`, would otherwise abort the launcher before it ever
 # reached the namespace.
+# One TCP probe, three outcomes, because the verdict depends on telling them apart:
+#   0 — the handshake completed. Whatever came back, the packet arrived.
+#   1 — refused. This is the only outcome that proves isolation.
+#   2 — timed out. Proves nothing either way, and must not be read as a pass.
+#
+# `curl` rather than bash's `/dev/tcp`: the test suite can stub a command and cannot
+# stub a builtin redirection, and a check that cannot be tested is how this one got
+# broken in the first place. Correctness does not depend on HTTP — a port accepting
+# TCP without speaking HTTP returns 52 or 56, and both mean the connection was made.
+probe_tcp() {
+  local rc=0
+  (
+    unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
+    curl -s --noproxy '*' -o /dev/null --max-time "${2:-5}" "http://$1/"
+  ) 2>/dev/null || rc=$?
+  case "$rc" in
+    0 | 52 | 56) return 0 ;;
+    28) return 2 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Candidate targets, as address:port. Ports matter: the previous version probed
+# port 80 only, so a target with nothing listening there answered the same way
+# whether the namespace was sealed or wide open, and two of three targets on a
+# typical host were therefore decorative.
+leak_candidates() {
+  local gw a p
+  gw="$(ip route 2>/dev/null | awk '/^default/ && $3 ~ /^[0-9]/ { print $3 }' | head -1 || true)"
+  if [ -n "$gw" ]; then
+    printf '%s:80\n%s:443\n' "$gw" "$gw"
+  fi
+  # Only listeners bound to every interface: one bound to 127.0.0.1 is not
+  # reachable from another namespace even without isolation, so it would prove
+  # nothing either.
+  while read -r p; do
+    [ -n "$p" ] || continue
+    while read -r a; do
+      [ -n "$a" ] || continue
+      printf '%s:%s\n' "$a" "$p"
+    done < <(ip -4 -o addr show scope global 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | awk '!/^169\.254\.42\./' || true)
+  done < <(ss -ltn 2>/dev/null | awk 'NR > 1 { print $4 }' | grep -E '^(\*|0\.0\.0\.0|\[::\]):' | sed 's/.*://' | sort -u || true)
+}
+
+# Only candidates the host itself can reach are evidence. Confirming from outside
+# the namespace is the whole point: if the host cannot reach it either, the
+# namespace failing to reach it says nothing at all.
 leak_targets() {
-  {
-    ip route 2>/dev/null | awk '/^default/ && $3 ~ /^[0-9]/ { print $3 }' || true
-    ip -4 -o addr show scope global 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 || true
-  } | awk '!/^169\.254\.42\./' | sort -u || true
+  local hp
+  while read -r hp; do
+    [ -n "$hp" ] || continue
+    if probe_tcp "$hp" 3; then printf '%s\n' "$hp"; fi
+  done < <(leak_candidates | sort -u) || true
 }
 
 # The neutral account names THREAT-MODEL.md documents. If the username IS the
@@ -441,7 +526,11 @@ startup_check() {
   echo "                 the provider knows which customer this is — it is what you pay with"
   if [ "$NETWORK" = "tor" ]; then
     if [ "$VERIFY" = "1" ]; then
-      echo "  network        tor, verified from inside the namespace before launch"
+      # Future tense on purpose. This prints before the confirmation prompt, and the
+      # egress check runs after it — saying "verified" here would assert an
+      # accomplished fact to get consent for the thing that establishes it.
+      echo "  network        tor — egress will be verified from inside the namespace"
+      echo "                 before the agent starts, and the receipt will name the exit"
     else
       echo "  network        tor, NOT verified (--no-verify)"
     fi
@@ -482,7 +571,7 @@ receipt_write() {
   if [ "$RECEIPT_DONE" = "1" ]; then return "$status"; fi
   RECEIPT_DONE=1
 
-  local end_epoch end_stamp elapsed exit_ip user receipt started=0 leak=""
+  local end_epoch end_stamp elapsed exit_ip user receipt started=0 leak="" leak_body=""
 
   exit_ip=""
   if [ -n "$EGRESS_FILE" ] && [ -f "$EGRESS_FILE" ]; then
@@ -533,8 +622,23 @@ receipt_write() {
     fi
     case "$leak" in
       passed*)
-        echo "isolation:    leak test passed — ${leak#passed } private target(s)"
-        echo "              unreachable from inside the namespace"
+        # Says what was proved, not how many things were tried. Each target here
+        # answered a TCP connect from the host and refused one from inside the
+        # namespace; that difference is the evidence. The round-trip times are the
+        # corroboration — a refusal at the kernel's own closed port comes back in
+        # well under a millisecond, while one refused after leaving through onion0
+        # takes hundreds.
+        leak_body="${leak#passed }"
+        echo "isolation:    leak test passed — ${leak_body%%|*} target(s) reachable from"
+        echo "              the host refused the connection from inside the namespace"
+        if [ "${leak_body#*|}" != "${leak_body%%|*}" ] && [ -n "${leak_body#*|}" ]; then
+          echo "              refusal times: ${leak_body#*|}"
+        fi
+        ;;
+      inconclusive*)
+        echo "isolation:    leak test INCONCLUSIVE —${leak#inconclusive} timed out"
+        echo "              rather than refusing. Launched anyway with --force-unsafe."
+        echo "              Isolation was neither proved nor disproved this session."
         ;;
       forced*)
         echo "isolation:    LEAK —${leak#forced} answered from inside the namespace."
@@ -566,7 +670,11 @@ receipt_write() {
     echo "Calypso is not in the request path, so this states session facts, not"
     echo "contents. It cannot count requests or tell you what was sent — by design:"
     echo "reading your traffic to report on it is the thing it refuses to do."
-  } > "$receipt"
+  } > "$receipt.partial"
+  # Atomic: a second Ctrl-C landing mid-write would otherwise leave a truncated
+  # receipt with nothing marking it truncated. This is the one document whose job is
+  # to be true, so it appears whole or not at all.
+  mv -f "$receipt.partial" "$receipt"
 
   cat "$receipt" >&2
   echo >&2
@@ -590,11 +698,47 @@ doctor_bin() {
   return 1
 }
 
+# `oniux --version` does not exist, so the revision comes from cargo's own install
+# registry. It matters: every isolation finding in docs/FINDINGS.md was measured
+# against one revision of an experimental tool, and without knowing which, none of
+# them is reproducible — including by their author, after the next `cargo install`.
+oniux_revision() {
+  local reg="${CARGO_HOME:-$HOME/.cargo}/.crates2.json"
+  [ -f "$reg" ] || return 1
+  python3 - "$reg" <<'PY' 2>/dev/null || return 1
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for key in data.get("installs", {}):
+    if key.startswith("oniux "):
+        print(key)
+        break
+else:
+    raise SystemExit(1)
+PY
+}
+
 doctor() {
-  local failed=0
+  local failed=0 rev
 
   echo "checked, on this host:"
-  doctor_bin oniux    "cargo install --git https://gitlab.torproject.org/tpo/core/oniux" || failed=1
+  if [ "$P_NETWORK" = "none" ]; then
+    echo "  n/a   oniux — this profile is NETWORK=none, so nothing isolates it"
+  else
+    if doctor_bin oniux "cargo install --git https://gitlab.torproject.org/tpo/core/oniux --tag v0.11.0"; then
+      if rev="$(oniux_revision)"; then
+        echo "        $rev"
+      else
+        echo "        version unknown — cargo's install registry did not name it, so the"
+        echo "        findings in docs/FINDINGS.md cannot be tied to what is installed"
+      fi
+    else
+      failed=1
+    fi
+  fi
+  # Both the leak test and the egress check are curl. Its absence is otherwise
+  # discovered after the user has already confirmed a launch.
+  doctor_bin curl     "install it with your package manager" || failed=1
   doctor_bin calypsocode-agent "build it: github.com/MyrLeProgrammeur/calypsocode-agent" || failed=1
 
   if [ -f "$PROFILE_FILE" ]; then
@@ -691,6 +835,16 @@ fi
 
 profile_load "$PROFILE_NAME"
 
+# Resolved before the subcommand dispatch, not after: `profile` and `doctor` report on
+# the compartment, and reporting the file's value while an override is in force would
+# put a backend choice in a second place — the thing the picker's design exists to
+# prevent.
+NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
+case "$NETWORK" in
+  tor | none) ;;
+  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
+esac
+
 case "$COMMAND" in
   profile)
     profile_show
@@ -703,12 +857,6 @@ case "$COMMAND" in
 esac
 
 # --- launch ----------------------------------------------------------------
-
-NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
-case "$NETWORK" in
-  tor | none) ;;
-  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
-esac
 
 API_KEY_VALUE="${!P_API_KEY_ENV:-}"
 if [ -z "$API_KEY_VALUE" ]; then
@@ -741,6 +889,19 @@ export XDG_STATE_HOME="$COMPARTMENT_DIR/state"
 # shellcheck disable=SC2163
 export "$P_API_KEY_ENV=$API_KEY_VALUE"
 
+# The agent contacts two third parties that are not the provider, by default, on
+# every launch: models.dev (hourly, carrying its own product-and-version token) and
+# a release endpoint for an update check that can replace the binary. Both leave
+# through the same circuit as provider traffic, and the receipt cannot see either —
+# Calypso is not in the request path, so it has no way to report them. Refusing them
+# here is the only place it can be done.
+#
+# Belt and braces on purpose: the environment variables are upstream's own opt-outs
+# and could be renamed, while `autoupdate` in the generated config is a setting
+# upstream has to honour. Neither alone is a guarantee.
+export OPENCODE_DISABLE_AUTOUPDATE=1
+export OPENCODE_DISABLE_MODELS_FETCH=1
+
 # There is no Tor to verify in `none` mode; the warning below is the whole
 # story there.
 if [ "$NETWORK" = "none" ]; then VERIFY=0; fi
@@ -758,7 +919,25 @@ rm -f "$EGRESS_FILE" "$STARTED_FILE" "$LEAK_FILE"
 export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
 export CALYPSO_STARTED_FILE="$STARTED_FILE"
 export CALYPSO_LEAK_FILE="$LEAK_FILE"
-LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
+# Checked here, on the host, and not only inside the namespace: the host-side
+# confirmation of leak targets needs curl too, and without it every candidate looks
+# unreachable. The user would be told "no target answered" — true, and the wrong
+# diagnosis entirely. The inner check stays as well; either alone catches a missing
+# curl, and the tests assert the property rather than either line.
+if [ "$VERIFY" = "1" ] && ! command -v curl >/dev/null 2>&1; then
+  die "curl not found — it is what confirms a leak target answers at all, and what
+  proves the egress is Tor. Install it, or accept an unverified session with
+  --no-verify."
+fi
+
+# Only when the leak test will actually run. Confirming targets means opening a TCP
+# connection to each candidate and waiting on the ones that do not answer, which costs
+# real seconds — spending them for a check that `--no-verify` or `NETWORK=none` has
+# already switched off is work done to reach a conclusion nobody will read.
+LEAK_TARGETS=""
+if [ "$VERIFY" = "1" ]; then
+  LEAK_TARGETS="$(leak_targets | tr '\n' ' ')"
+fi
 export CALYPSO_LEAK_TARGETS="$LEAK_TARGETS"
 export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
 
@@ -767,6 +946,23 @@ export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
 # Any check that has to see the namespace has to run in here.
 INNER=$(cat <<'INNER_EOF'
 set -euo pipefail
+
+# Duplicated from the launcher on purpose: this runs in a fresh bash inside the
+# namespace, so it inherits no functions. Keep the two in step — the host uses it to
+# confirm a target answers, this side uses it to prove the same target does not.
+#   0 handshake completed · 1 refused · 2 timed out, which is not a pass.
+probe_tcp() {
+  local rc=0
+  (
+    unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
+    curl -s --noproxy '*' -o /dev/null --max-time "${2:-5}" "http://$1/"
+  ) 2>/dev/null || rc=$?
+  case "$rc" in
+    0 | 52 | 56) return 0 ;;
+    28) return 2 ;;
+    *) return 1 ;;
+  esac
+}
 
 if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
   if ! command -v curl >/dev/null 2>&1; then
@@ -786,26 +982,54 @@ if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
   # (docs/FINDINGS.md F10).
   leak_targets_in="${CALYPSO_LEAK_TARGETS:-}"
   if [ -z "${leak_targets_in// /}" ]; then
-    echo "calypsocode: cannot run the leak test — no private addresses were found on" >&2
-    echo "calypsocode: the host, so there is nothing to prove unreachable." >&2
+    echo "calypsocode: cannot run the leak test — no target on the host answered a TCP" >&2
+    echo "calypsocode: connect from the host itself, so there is nothing whose" >&2
+    echo "calypsocode: unreachability from in here would mean anything." >&2
     echo "calypsocode: a test that did not run is not a test that passed." >&2
     exit 1
   fi
 
   echo "calypsocode: leak test — the host's own network must be unreachable from here." >&2
   leak_reached=""
+  leak_unclear=""
   leak_count=0
+  leak_rtt=""
   for leak_target in $leak_targets_in; do
     leak_count=$((leak_count + 1))
-    if (
-      unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy
-      curl -s --noproxy '*' -o /dev/null --max-time 5 "http://$leak_target/"
-    ) 2>/dev/null; then
-      leak_reached="$leak_reached $leak_target"
-    fi
+    leak_t0="$(date +%s%N)"
+    # A bare TCP connect, and every outcome is classified rather than lumped into
+    # "did not answer". The old test asked for an HTTP page and treated any curl
+    # failure as unreachable, so "nothing is listening on port 80" scored as
+    # sealed — the same verdict a completely open namespace produces. Only a
+    # refused connection proves isolation. A completed handshake is a leak even if
+    # nothing useful came back, and a timeout proves nothing either way.
+    leak_rc=0
+    probe_tcp "$leak_target" 5 || leak_rc=$?
+    leak_ms=$(( ( $(date +%s%N) - leak_t0 ) / 1000000 ))
+    leak_rtt="$leak_rtt $leak_target=${leak_ms}ms"
+    case "$leak_rc" in
+      0) leak_reached="$leak_reached $leak_target" ;;
+      2) leak_unclear="$leak_unclear $leak_target" ;;
+      *) : ;;
+    esac
   done
 
-  if [ -n "$leak_reached" ]; then
+  # Inconclusive is not a pass. A slow host swallowing the connect looks exactly
+  # like a sealed namespace, and guessing in the reassuring direction is the bias
+  # this whole check exists to avoid.
+  if [ -z "$leak_reached" ] && [ -n "$leak_unclear" ]; then
+    echo "calypsocode: leak test inconclusive —$leak_unclear timed out rather than" >&2
+    echo "calypsocode: refusing the connection, so isolation is neither proved nor" >&2
+    echo "calypsocode: disproved. Refusing to launch on a test that cannot answer." >&2
+    if [ "${CALYPSO_FORCE_UNSAFE:-0}" = "1" ]; then
+      echo "calypsocode: --force-unsafe given — launching anyway. The receipt will say so." >&2
+      if [ -n "${CALYPSO_LEAK_FILE:-}" ]; then
+        printf 'inconclusive%s\n' "$leak_unclear" > "$CALYPSO_LEAK_FILE"
+      fi
+    else
+      exit 1
+    fi
+  elif [ -n "$leak_reached" ]; then
     echo "calypsocode: LEAK DETECTED —$leak_reached answered from inside the namespace." >&2
     echo "calypsocode: the compartment is not sealed. Traffic you believed isolated can" >&2
     echo "calypsocode: reach your own network, and the receipt's claims would be false." >&2
@@ -820,9 +1044,15 @@ if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
       exit 1
     fi
   else
-    echo "calypsocode: leak test passed — $leak_count private target(s) unreachable." >&2
+    # "answers from the host" is the load-bearing part of this sentence. The count
+    # used to be of targets *probed*, which said nothing, because a target with
+    # nothing listening cannot fail the test.
+    echo "calypsocode: leak test passed — $leak_count target(s) that answer from the" >&2
+    echo "calypsocode: host refused the connection from in here.$leak_rtt" >&2
     if [ -n "${CALYPSO_LEAK_FILE:-}" ]; then
-      printf 'passed %s\n' "$leak_count" > "$CALYPSO_LEAK_FILE"
+      # count and round-trip times in separate fields; the receipt renders them on
+      # separate lines and must not have to guess where one ends.
+      printf 'passed %s|%s\n' "$leak_count" "${leak_rtt# }" > "$CALYPSO_LEAK_FILE"
     fi
   fi
 

@@ -231,4 +231,18 @@ EOF
 test_interrupted_session_does_not_report_success() { _direct_signal_test INT 130; }
 test_terminated_session_does_not_report_success() { _direct_signal_test TERM 143; }
 
+# The receipt is written to a temp file and moved into place, so a second signal
+# landing mid-write cannot leave a truncated one behind. Nothing may survive under the
+# intermediate name either — a stray `.partial` next to real receipts is a file a
+# reader would open.
+test_no_partial_receipt_is_left_behind() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes
+  assert_status 0
+  local leftovers
+  leftovers="$(find "$CALYPSO_STATE_DIR" -name '*.partial' 2>/dev/null | wc -l)"
+  assert_equals "$leftovers" "0"
+}
+
 run_tests

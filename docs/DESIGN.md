@@ -53,7 +53,8 @@ you need to be linkable.
 | Signal | Who or what? | Calypso |
 |---|---|---|
 | IP address | who | ✅ Tor, via `oniux` |
-| Locale, timezone, hostname | who | ✅ set in the namespace |
+| Locale, timezone | who | ✅ set in the namespace |
+| Hostname | who | ❌ not set — see below |
 | Git author name and email | who | ✅ per-compartment identity |
 | Agent config / memory files | who — a dossier about you | ✅ per-compartment config |
 | OS / kernel / shell metadata | who | ✅ normalized where the agent allows |
@@ -67,6 +68,18 @@ you need to be linkable.
 
 The ❌ rows are in scope by the thesis and out of reach in practice. They belong
 in the receipt, stated plainly, every session.
+
+**Hostname, and why this row was wrong until 2026-07-26.** This table marked
+hostname ✅ *set in the namespace*, and the block further down listed `hostname`
+among the things the launcher sets. Neither was true: `bin/calypsocode` contains no
+occurrence of the word, and `oniux` offers no UTS namespace and no hostname option,
+so the child shares the host's. A ✅ with no code behind it and no measurement is
+worse than a ❌ — it is the one kind of error this table exists to prevent.
+
+Setting it would need `unshare --uts` wrapped around the launch, which is a change
+to how the namespace is created rather than another environment variable. Recorded
+as not done rather than quietly attempted, because the honest ❌ is worth more than
+a hurried implementation nobody has measured.
 
 **Client & TLS fingerprint, in detail.** Measured, not assumed. Before the fork,
 the agent sent a `User-Agent` naming itself — `opencode/1.18.5
@@ -91,13 +104,14 @@ than "the client identifies itself", and that have different evidence:
 - **TLS/JA3 is untested and outside what Calypso changes.** Moving the network
   path to Tor does not alter the TLS client stack's own signature. Nothing here
   addresses it, and nothing here has measured it.
-- **The measurement covers the from-source build, not a compiled binary.** The
-  build script passes `--user-agent=opencode/<version>` to Bun as a compiled-in
-  default (`packages/opencode/script/build.ts`). Whether that surfaces on the
-  wire depends on the SDK setting the header explicitly on every request, which
-  is what the from-source measurement suggests but does not prove for the
-  compiled path. Until a compiled binary is measured against a logging endpoint,
-  treat the ✅ as applying to the build that was tested.
+- ~~The measurement covers the from-source build, not a compiled binary.~~
+  **Settled 2026-07-26.** The build script passes `--user-agent=opencode/<version>`
+  to Bun as a compiled-in default (`packages/opencode/script/build.ts`), so the
+  compiled artifact was the open question.
+  [F15](FINDINGS.md#f15--the-compiled-binary-sends-no-product-token) measured it
+  against a logging endpoint: no product token reaches the wire, because the SDK
+  sets the header explicitly and an explicit header beats Bun's default. The
+  concern was real and the answer is that it does not leak.
 
 ### The rule for compartments
 
@@ -166,7 +180,6 @@ controlling the environment it runs in. No traffic is inspected or modified.
 ```
 LC_ALL=C                  # no locale leak (French shell errors, etc.)
 TZ=UTC                    # no timezone inference
-hostname                  # set inside the namespace
 GIT_AUTHOR_NAME=dev       # git stops printing your name
 GIT_AUTHOR_EMAIL=dev@localhost
 GIT_COMMITTER_NAME=dev
@@ -258,9 +271,14 @@ Properties worth proving:
 1. **Egress proof.** From inside the namespace, confirm the exit is Tor and
    record which exit. Already demonstrated in
    [F4](FINDINGS.md#f4--venice-and-tinfoil-do-not-block-tor-exits).
-2. **Negative leak test.** Deliberately attempt what *must* fail — reach a host
-   interface, resolve DNS outside the namespace — and assert it fails. This is
-   the only way to prove isolation rather than assume it.
+2. **Negative leak test.** Deliberately attempt what *must* fail — open a TCP
+   connection to a host service that answers from the host — and assert it is
+   refused. This is the only way to prove isolation rather than assume it.
+   The DNS half of this was specified here and correctly never built:
+   [F10](FINDINGS.md#f10--how-the-namespace-refuses-and-why-a-dns-based-leak-test-proves-nothing)
+   measured that a DNS-based test proves nothing. What it takes for the TCP half
+   to prove anything is
+   [F14](FINDINGS.md#f14--the-leak-test-could-not-fail-and-what-it-takes-to-make-it-able-to).
 3. **Identity check at startup.** Once, before anything is sent: is the git
    identity the compartment's or the user's real one? Does the project path
    contain the OS username? Report and let the user decide.

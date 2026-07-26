@@ -7,11 +7,12 @@ identity, environment metadata, agent config — from what your coding agent
 transmits, and reports per session what it removed and what it did not.
 
 > **Status: it works, and the premise has been measured once.** A real coding
-> session ran end-to-end through the launcher over Tor — 8 round trips, 3.8s
-> mean, 0 failures ([the gate](docs/ROADMAP.md#gate)). That is an existence
-> proof, not a track record: one task, one provider, one day. What a single
-> session cannot show — how a provider reacts to Tor-origin traffic over weeks,
-> how the latency feels on a large repository — is listed in
+> session ran end-to-end through the launcher over Tor on the agent this project
+> actually ships — 4 round trips, 3.6s mean, 0 failures
+> ([F12](docs/FINDINGS.md#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor)).
+> That is an existence proof, not a track record: one task, one provider, one day.
+> What a single session cannot show — how a provider reacts to Tor-origin traffic
+> over weeks, how the latency feels on a large repository — is listed in
 > [docs/FINDINGS.md](docs/FINDINGS.md#still-untested).
 
 ## The idea
@@ -48,12 +49,8 @@ One launch = one namespace = one circuit. One compartment = one key = one
 config = one identity, and it persists across launches. Nothing crosses between
 compartments.
 
-This is for people whose **network is observed** while their account is not the
-threat: developers in censoring jurisdictions, people whose employer or ISP
-monitors what they connect to, people where certain questions are dangerous to
-be seen asking. Your provider still knows which customer is paying. What the
-observer between you and the provider learns is nothing — including which model
-you chose, uncensored or otherwise.
+Your provider still knows which customer is paying. What an observer between you
+and the provider learns is nothing — including which model you chose.
 
 ## Install
 
@@ -90,7 +87,7 @@ directory, which the next build erases and recreates.
 **3. oniux**, from the Tor Project — experimental, per its own announcement:
 
 ```sh
-cargo install --git https://gitlab.torproject.org/tpo/core/oniux
+cargo install --git https://gitlab.torproject.org/tpo/core/oniux --tag v0.11.0
 ```
 
 **Check it.** `~/.local/bin` must be on your `PATH` first:
@@ -99,8 +96,9 @@ cargo install --git https://gitlab.torproject.org/tpo/core/oniux
 calypsocode doctor
 ```
 
-`doctor` reports what it checked and what it could not, per profile: `oniux`,
-`calypsocode-agent`, and whether the compartment's key is present. It does not
+`doctor` reports what it checked and what it could not, per profile: `oniux` and
+the exact revision installed, `curl`, `calypsocode-agent`, and whether the
+compartment's key is present. It does not
 conclude that the stack works — that is what the receipt at the end of a real
 session is for.
 
@@ -149,10 +147,13 @@ prompt content, and your session timing.
 
 Everything in [docs/FINDINGS.md](docs/FINDINGS.md) was measured, not assumed:
 
-- `oniux` isolation is fail-closed at the kernel routing level ✅
+- `oniux` isolation is fail-closed at the kernel routing level ✅ — and every
+  session proves it against targets confirmed reachable from the host first,
+  which it did not until 2026-07-26 ⚠️
 - Venice and Tinfoil do **not** block Tor exits ✅
 - Authenticated, billed inference over Tor works — HTTP 200 in 3.0s ✅
-- A real coding session ran end-to-end: 8 round trips, 3.8s mean, 0 failures ✅
+- A real coding session ran end-to-end on the shipped agent: 4 round trips,
+  3.6s mean, 0 failures ✅
 - Distinct SOCKS credentials yield distinct circuits ✅
 - `oniux` injects `ALL_PROXY`, which silently breaks same-namespace loopback ⚠️
 - `XDG_CONFIG_HOME` alone does **not** compartment an agent — data and state
@@ -174,8 +175,10 @@ CalypsoCode's own code is the launcher — profiles, compartments, egress
 verification, the receipt. The coding agent it runs, `calypsocode-agent`, is a
 rebranded fork of [OpenCode](https://github.com/anomalyco/opencode): the same
 agentic loop and tool use, with CalypsoCode's palette and disclosure on top.
-Run `calypsocode-agent --about` for both licenses that apply — OpenCode's
-original (MIT) and CalypsoCode's own changes (AGPL-3.0).
+Run `calypsocode-agent --about` for the attribution. The fork is MIT, like the
+original: the changes are a rebrand plus one header fix, and MIT keeps that fix
+offerable upstream. This launcher is AGPL-3.0 — it is the part worth protecting,
+because it holds the receipt, the leak test and the disclosure.
 
 ## Prior art
 

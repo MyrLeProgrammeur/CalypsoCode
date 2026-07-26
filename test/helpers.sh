@@ -69,7 +69,8 @@ stub_calypsocode_agent() {
 echo "STUB_CALYPSOCODE_AGENT_RAN args=\$*"
 for v in LC_ALL LANG TZ GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME \\
          GIT_COMMITTER_EMAIL XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \\
-         OPENCODE_CONFIG TEST_KEY; do
+         OPENCODE_CONFIG OPENCODE_DISABLE_AUTOUPDATE OPENCODE_DISABLE_MODELS_FETCH \\
+         TEST_KEY; do
   echo "ENV \$v=\${!v:-<unset>}"
 done
 exit $exit_code
@@ -110,9 +111,18 @@ stub_ip_empty() {
   chmod +x "$SANDBOX/bin/ip"
 }
 
-# Simulates the namespace's network. Private targets are unreachable and the
-# egress check reports Tor, unless STUB_CURL_REACHABLE names a host that should
-# answer — which is what a broken compartment looks like.
+# Simulates two networks with one binary, because the launcher probes the same
+# targets from both sides: from the host, to confirm a target answers at all, and
+# from inside the namespace, where it must not. Only a target that answers on the
+# host and refuses inside is evidence of isolation.
+#
+# The two sides are told apart by $CALYPSO_LEAK_TARGETS, which the launcher exports
+# only after the host-side confirmation has already run. Unset means host side.
+#
+#   STUB_CURL_REACHABLE   hosts that answer from *inside* — a broken compartment
+#   STUB_CURL_TIMEOUT     hosts that time out inside — an inconclusive test
+#   STUB_CURL_HOST_DEAF   hosts that do not answer on the host either, so they are
+#                         not evidence and must be dropped before the namespace
 stub_curl() {
   cat > "$SANDBOX/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -121,10 +131,39 @@ for arg in "$@"; do
   case "$arg" in http://*|https://*) url="$arg" ;; esac
 done
 case "$url" in
-  *check.torproject.org*) echo '{"IsTor":true,"IP":"185.220.101.1"}'; exit 0 ;;
+  *check.torproject.org*)
+    # The egress check, driven by:
+    #   STUB_EGRESS_ANSWERS   what to echo, verbatim. Default: a Tor exit.
+    #   STUB_EGRESS_FAIL_N    fail this many attempts before answering, so the
+    #                         retry loop can be exercised. Counted in a file
+    #                         because each attempt is a fresh process.
+    if [ -n "${STUB_EGRESS_FAIL_N:-}" ]; then
+      counter="${STUB_EGRESS_COUNTER:-/dev/null}"
+      n=0
+      [ -f "$counter" ] && n="$(cat "$counter")"
+      n=$((n + 1))
+      echo "$n" > "$counter"
+      if [ "$n" -le "$STUB_EGRESS_FAIL_N" ]; then exit 7; fi
+    fi
+    printf '%s\n' "${STUB_EGRESS_ANSWERS-{\"IsTor\":true,\"IP\":\"185.220.101.1\"\}}"
+    exit 0
+    ;;
 esac
 host="${url#http://}"
 host="${host%%/*}"
+
+if [ -z "${CALYPSO_LEAK_TARGETS:-}" ]; then
+  # Host side: everything answers unless deliberately made deaf.
+  for deaf in ${STUB_CURL_HOST_DEAF:-}; do
+    [ "$deaf" = "$host" ] && exit 7
+  done
+  exit 0
+fi
+
+# Inside the namespace.
+for t in ${STUB_CURL_TIMEOUT:-}; do
+  [ "$t" = "$host" ] && exit 28
+done
 for reachable in ${STUB_CURL_REACHABLE:-}; do
   [ "$reachable" = "$host" ] && exit 0
 done
@@ -138,7 +177,44 @@ stub_namespace() {
   stub_calypsocode_agent
   stub_oniux
   stub_ip
+  stub_ss
   stub_curl
+}
+
+# A PATH with no curl on it at all.
+#
+# Deleting $SANDBOX/bin/curl is not enough: the sandbox PATH ends in /usr/bin:/bin, so
+# the lookup falls through to the real one. That is why the "curl is missing" branch
+# was untestable, and why a mutation removing its refusal survived a green suite.
+#
+# The list is the external commands the launcher needs *before* the curl guard fires.
+# It is short because the guard is early and fatal. If a test using this starts failing
+# with "command not found", the guard moved later — which is itself worth knowing.
+stub_no_curl() {
+  mkdir -p "$SANDBOX/nocurl"
+  local c
+  for c in bash env id date mkdir rm cat tr sed awk cut sort head grep timeout uname sleep printf; do
+    [ -x "/usr/bin/$c" ] && ln -sf "/usr/bin/$c" "$SANDBOX/nocurl/$c"
+    [ -x "/bin/$c" ] && ln -sf "/bin/$c" "$SANDBOX/nocurl/$c"
+  done
+  export PATH="$SANDBOX/bin:$SANDBOX/nocurl"
+}
+
+# Listening ports, as `ss -ltn` prints them. Stubbed so the suite never reads the
+# developer's real open ports — which would make the leak test's target list differ
+# per machine, and the assertions below meaningless.
+#
+# One listener on every interface (:22000) and one on loopback only (:631). The
+# loopback one must never become a target: it is unreachable from another namespace
+# even with no isolation at all, so it could not fail the test.
+stub_ss() {
+  cat > "$SANDBOX/bin/ss" <<'EOF'
+#!/usr/bin/env bash
+echo "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process"
+echo "LISTEN 0      4096   *:22000             *:*"
+echo "LISTEN 0      4096   127.0.0.1:631       0.0.0.0:*"
+EOF
+  chmod +x "$SANDBOX/bin/ss"
 }
 
 # --- running ---------------------------------------------------------------
