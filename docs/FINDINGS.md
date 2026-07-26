@@ -458,6 +458,10 @@ compiled one, which is what ruled out the compile as the cause.
 - `cost` came back `0.0` in the agent's own session record even though Venice
   returned a cost field on the direct request above. The fork's generic provider
   path does not appear to parse it. Unexplained, not investigated.
+- **The `3 private target(s)` in the receipt above was not three pieces of evidence.**
+  At most one of the three could have failed. Measured and replaced —
+  [F14](#f14--the-leak-test-could-not-fail-and-what-it-takes-to-make-it-able-to). The
+  number here is left as printed, because it is what the tool said.
 - The receipt correctly flagged `OS username 'matheo' is in your project path` —
   the session ran under `$HOME` because the three attempts before it had been run
   under `/tmp`. **Correction:** an earlier version of this entry said the
@@ -552,6 +556,78 @@ which this agent is not.
   Verifying a third party's guarantees is out of scope
   ([ROADMAP](ROADMAP.md#decisions-taken)); this entry records that the evidence is
   advertised, nothing more.
+
+## F14 — The leak test could not fail, and what it takes to make it able to
+
+**Status: confirmed. Measured 2026-07-26.** This is the correction to what
+[F12](#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor) reported as
+`leak test passed — 3 private target(s)`. F12's number is what the tool printed and is
+not edited here; what this entry establishes is that the number was not evidence.
+
+**The old check asked the wrong question.** It probed `http://<target>/` and treated
+**curl exit 0 as a leak and every other exit code as sealed.** Exit 7 means "nothing is
+listening on that port", not "unreachable". Run from the host — no namespace, no
+isolation of any kind — with the identical command:
+
+| Target | curl exit | Old verdict |
+|---|---|---|
+| `192.168.1.43` — the host's own address | 7 | sealed ❌ |
+| `172.17.0.1` — docker | 7 | sealed ❌ |
+| `192.168.1.1` — the gateway | 0 | leak ✅ |
+| `192.168.1.43:22000` — a port that **does** listen | **56** | sealed ❌ |
+
+`ss -ltn` confirms nothing on this host listens on port 80. Two of the three targets
+therefore returned the same verdict whether the namespace was sealed or wide open. The
+fourth row is the sharpest: **exit 56 means the TCP handshake completed** and it was
+scored as sealed. So was exit 28, because `--max-time 5` made a timeout indistinguishable
+from a refusal — a leak to a slow host read as isolation.
+
+**On this machine the check was not entirely vacuous**, because this gateway happens to
+serve HTTP on port 80. That is the whole problem: its ability to fail depended on the
+router model. On a LAN whose gateway serves HTTPS only, it would have reported
+`3 private target(s) unreachable` with isolation completely broken.
+
+F10 is where this slipped through. It measured `192.168.1.1` and `192.168.1.43` at
+rc=7 *inside* the namespace and concluded that private destinations fail fast while
+public ones succeed. True, and the wrong asymmetry: private-versus-public rather than
+sealed-versus-unsealed. The host-side control was never taken. F10 also measured the
+signal that would have caught it — 246ms and 252ms — where an unisolated connection to a
+closed local port returns RST in well under a millisecond.
+
+**What replaced it.** Targets are now `address:port` pairs **confirmed from the host to
+accept a TCP connection** before being passed into the namespace; a target the host
+cannot reach is not evidence and is dropped. Ports come from `ss -ltn`, restricted to
+listeners bound to every interface — a loopback-only listener is unreachable from another
+namespace even with no isolation, so it could not fail either. Three outcomes are now
+distinguished: handshake completed is a leak, refused is a pass, timed out is
+inconclusive and refuses to launch.
+
+**Measured after the change, one real session over Tor:**
+
+```
+leak test passed — 6 target(s) that answer from the host refused the connection
+refusal times: 172.17.0.1:1716=3630ms  172.17.0.1:22000=141ms
+               192.168.1.1:443=103ms   192.168.1.1:80=97ms
+               192.168.1.43:1716=139ms 192.168.1.43:22000=165ms
+```
+
+Six pieces of evidence where there had been one. The times are the corroboration and are
+now in the receipt: 97ms to 3630ms, all orders of magnitude above the sub-millisecond
+refusal a local closed port produces, which is what distinguishes "refused by arti after
+leaving through onion0" from "refused by the kernel because nothing was there".
+
+**Caveats:**
+
+- The target set is discovered per host, so the count varies by machine. Six here; a
+  machine with no all-interface listener and an HTTPS-only gateway may find none, and
+  then the launcher refuses rather than reporting a pass over zero evidence.
+- `curl` is still the probe rather than a bare TCP connect. Deliberate: the test suite can
+  stub a command and cannot stub bash's `/dev/tcp` builtin, and a check that cannot be
+  tested is how this one broke. Correctness does not depend on HTTP — 52 and 56 both mean
+  the connection was made.
+- This says nothing about leaks by a path the probe does not take: a protocol other than
+  TCP, an interface that appeared after discovery, an address the host does not have. Same
+  limit F10 stated, and still true.
 
 ---
 

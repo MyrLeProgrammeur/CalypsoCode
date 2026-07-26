@@ -111,9 +111,18 @@ stub_ip_empty() {
   chmod +x "$SANDBOX/bin/ip"
 }
 
-# Simulates the namespace's network. Private targets are unreachable and the
-# egress check reports Tor, unless STUB_CURL_REACHABLE names a host that should
-# answer — which is what a broken compartment looks like.
+# Simulates two networks with one binary, because the launcher probes the same
+# targets from both sides: from the host, to confirm a target answers at all, and
+# from inside the namespace, where it must not. Only a target that answers on the
+# host and refuses inside is evidence of isolation.
+#
+# The two sides are told apart by $CALYPSO_LEAK_TARGETS, which the launcher exports
+# only after the host-side confirmation has already run. Unset means host side.
+#
+#   STUB_CURL_REACHABLE   hosts that answer from *inside* — a broken compartment
+#   STUB_CURL_TIMEOUT     hosts that time out inside — an inconclusive test
+#   STUB_CURL_HOST_DEAF   hosts that do not answer on the host either, so they are
+#                         not evidence and must be dropped before the namespace
 stub_curl() {
   cat > "$SANDBOX/bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -126,6 +135,19 @@ case "$url" in
 esac
 host="${url#http://}"
 host="${host%%/*}"
+
+if [ -z "${CALYPSO_LEAK_TARGETS:-}" ]; then
+  # Host side: everything answers unless deliberately made deaf.
+  for deaf in ${STUB_CURL_HOST_DEAF:-}; do
+    [ "$deaf" = "$host" ] && exit 7
+  done
+  exit 0
+fi
+
+# Inside the namespace.
+for t in ${STUB_CURL_TIMEOUT:-}; do
+  [ "$t" = "$host" ] && exit 28
+done
 for reachable in ${STUB_CURL_REACHABLE:-}; do
   [ "$reachable" = "$host" ] && exit 0
 done
@@ -139,7 +161,25 @@ stub_namespace() {
   stub_calypsocode_agent
   stub_oniux
   stub_ip
+  stub_ss
   stub_curl
+}
+
+# Listening ports, as `ss -ltn` prints them. Stubbed so the suite never reads the
+# developer's real open ports — which would make the leak test's target list differ
+# per machine, and the assertions below meaningless.
+#
+# One listener on every interface (:22000) and one on loopback only (:631). The
+# loopback one must never become a target: it is unreachable from another namespace
+# even with no isolation at all, so it could not fail the test.
+stub_ss() {
+  cat > "$SANDBOX/bin/ss" <<'EOF'
+#!/usr/bin/env bash
+echo "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process"
+echo "LISTEN 0      4096   *:22000             *:*"
+echo "LISTEN 0      4096   127.0.0.1:631       0.0.0.0:*"
+EOF
+  chmod +x "$SANDBOX/bin/ss"
 }
 
 # --- running ---------------------------------------------------------------
