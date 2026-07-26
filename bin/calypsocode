@@ -352,6 +352,22 @@ profile_load() {
   esac
 }
 
+# Printed wherever the key is missing. The launcher never sees the provider's
+# answer — it is not in the request path — so it cannot tell an absent key from
+# a revoked or expired one, and does not pretend to: it names the variable and
+# the profile, and leaves the diagnosis to the provider.
+#
+# It cannot name the command that fetches the secret either, because that is the
+# user's secret store and this tool deliberately does not have one. The shape is
+# what is missing today, not the tool.
+key_help() {
+  echo "  The profile names the variable, never the value."
+  echo "    fish       set -Ux $P_API_KEY_ENV <key>    — kept across terminals"
+  echo "    bash/zsh   export $P_API_KEY_ENV=<key>     — this terminal only"
+  echo "  Then:        calypsocode --profile $PROFILE_NAME"
+  echo "  The same line replaces a key the provider has stopped accepting."
+}
+
 profile_show() {
   echo "profile:      $P_PROFILE"
   echo "file:         $PROFILE_FILE"
@@ -374,6 +390,7 @@ profile_show() {
     echo "api key:      \$$P_API_KEY_ENV is set"
   else
     echo "api key:      \$$P_API_KEY_ENV is NOT set in this shell"
+    key_help
   fi
 }
 
@@ -814,6 +831,7 @@ doctor() {
     echo "  ok    \$$P_API_KEY_ENV is set"
   else
     echo "  FAIL  \$$P_API_KEY_ENV is not set in this shell"
+    key_help
     failed=1
   fi
 
@@ -964,8 +982,8 @@ esac
 
 API_KEY_VALUE="${!P_API_KEY_ENV:-}"
 if [ -z "$API_KEY_VALUE" ]; then
-  die "\$$P_API_KEY_ENV is empty or unset — this compartment has no key.
-  Export it from wherever you keep secrets, then run again."
+  die "\$$P_API_KEY_ENV is empty or unset — compartment '$P_PROFILE' has no key.
+$(key_help)"
 fi
 
 compartment_prepare
