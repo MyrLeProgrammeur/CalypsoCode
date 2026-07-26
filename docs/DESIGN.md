@@ -68,20 +68,36 @@ you need to be linkable.
 The ❌ rows are in scope by the thesis and out of reach in practice. They belong
 in the receipt, stated plainly, every session.
 
-**Client & TLS fingerprint, in detail.** Measured, not assumed: OpenCode sends
-a `User-Agent` header — `opencode/<version> ai-sdk/provider-utils/<version>
-runtime/bun/<version>` — verbatim to every generic OpenAI-compatible provider,
-on every request
+**Client & TLS fingerprint, in detail.** Measured, not assumed. Before the fork,
+the agent sent a `User-Agent` naming itself — `opencode/1.18.5
+ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14` — verbatim to every generic
+OpenAI-compatible provider, on every request
 ([F11](FINDINGS.md#f11--opencode-sends-a-client-identifying-user-agent-to-a-generic-openai-compatible-provider)).
-No `X-Title`, `HTTP-Referer`, or `X-Source` header was observed — those are
-OpenRouter-specific conventions this generic provider path doesn't use — but
-the `User-Agent` alone is a concrete, verified client fingerprint. That is why
-the row stays ⚠️ partial rather than ✅: the header is a known, now-measured
-gap that the fork's Batch 5
-(`docs/plans/done/calypsocode-ui-rebrand.md#batch-5--tier-2-de-brand-the-wire-conditional-on-batch-1`)
-removes or neutralises; the TLS/JA3 fingerprint underneath the header is a
-separate, still-untested dimension of "partial" — Calypso changes the network
-path (Tor), not the TLS client stack's own signature.
+No `X-Title`, `HTTP-Referer`, or `X-Source` header appeared: those are
+OpenRouter-specific conventions this generic path doesn't use, so their absence
+was never evidence of safety — the `User-Agent` alone was a concrete client
+fingerprint.
+
+Fork commit `dbffbc7` removed it. On the generic/third-party branch the agent now
+sets no `User-Agent` of its own (`packages/opencode/src/session/llm/request.ts`),
+leaving the SDK's: `ai-sdk/openai-compatible/2.0.41
+ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14` — an SDK and a runtime version,
+no product token. The provider-specific branch keeps its own header on purpose;
+that path talks to a service that already knows which client it is.
+
+The row stays ⚠️ partial rather than ✅, for two reasons that are now narrower
+than "the client identifies itself", and that have different evidence:
+
+- **TLS/JA3 is untested and outside what Calypso changes.** Moving the network
+  path to Tor does not alter the TLS client stack's own signature. Nothing here
+  addresses it, and nothing here has measured it.
+- **The measurement covers the from-source build, not a compiled binary.** The
+  build script passes `--user-agent=opencode/<version>` to Bun as a compiled-in
+  default (`packages/opencode/script/build.ts`). Whether that surfaces on the
+  wire depends on the SDK setting the header explicitly on every request, which
+  is what the from-source measurement suggests but does not prove for the
+  compiled path. Until a compiled binary is measured against a logging endpoint,
+  treat the ✅ as applying to the build that was tested.
 
 ### The rule for compartments
 

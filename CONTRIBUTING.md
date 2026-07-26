@@ -82,7 +82,7 @@ shellcheck -x test/run.sh test/helpers.sh test/*.test.sh
 
 # Config files are valid YAML/JSON
 yamllint config/*.yaml
-python3 -m json.tool config/opencode.json.example > /dev/null
+python3 -m json.tool config/agent.json.example > /dev/null
 
 # No secrets, in the diff or anywhere in history
 gitleaks detect --source . --redact
@@ -125,8 +125,8 @@ Explicitly **out of scope** (see [docs/ROADMAP.md](docs/ROADMAP.md#decisions-tak
 - Any hosted or pooled service shared between multiple users. The launcher is a
   local tool; adding a service is a project-direction decision rather than
   something to settle in a code review.
-- Rebuilding the coding agent itself. Wrap or fork OpenCode; the
-  differentiation here is the privacy layer.
+- Rebuilding the coding agent itself. OpenCode is forked, as `calypsocode-agent`;
+  the differentiation here is the privacy layer, not the agent.
 - Per-request key rotation. It is unsound on a shared circuit and not
   implementable in LiteLLM anyway.
 
