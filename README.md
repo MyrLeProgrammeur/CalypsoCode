@@ -1,4 +1,9 @@
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/calypsocode-logo-dark.svg">
+  <img alt="CalypsoCode" src="docs/assets/calypsocode-logo-light.svg" width="464">
+</picture>
+
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-8b4cff.svg)](LICENSE)
 
 # CalypsoCode
 
@@ -38,12 +43,19 @@ GIT_NAME=dev
 GIT_EMAIL=dev@localhost
 ```
 
-Run `calypsocode` with no profile yet and it offers to write one: it asks which
-network backend you want, states plainly which are built and which are not, and
-never picks for you. Without a terminal, or with `--yes`, it refuses rather than
-choosing a default — a backend selected on your behalf is a leak with a friendly
-face. The answers go into the profile and nowhere else, so there is never a
-second place a backend choice could hide.
+`calypsocode --new-profile NAME` writes one: it asks which network backend you
+want, states plainly which are built and which are not, and never picks for you.
+Without a terminal, or with `--yes`, it refuses rather than choosing a default —
+a backend selected on your behalf is a leak with a friendly face. The answers go
+into the profile and nowhere else, so there is never a second place a backend
+choice could hide. Add `--from NAME` to copy the network and provider from a
+profile you already have; the key variable and the git identity are always asked
+for again, because two compartments sharing either are one customer to the
+provider.
+
+Creating never happens on the way to launching. `calypsocode --profile typo`
+reports that no such profile exists and lists the ones that do, rather than
+offering to build a compartment under the typo.
 
 One launch = one namespace. One compartment = one key = one config = one
 identity, and it persists across launches. Nothing crosses between compartments.
@@ -105,8 +117,8 @@ compartment's key is present. It does not
 conclude that the stack works — that is what the receipt at the end of a real
 session is for.
 
-You will need a profile before `doctor` has anything to check. Run `calypsocode`
-with no profile and it offers to write one. The subcommand comes first, so it is
+You will need a profile before `doctor` has anything to check; write one with
+`calypsocode --new-profile NAME`. The subcommand comes first, so it is
 `calypsocode doctor --profile NAME` — `calypsocode --profile NAME doctor` is read
 as a launch.
 

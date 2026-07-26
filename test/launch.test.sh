@@ -21,6 +21,51 @@ test_missing_key_refuses_to_launch() {
   assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
+# "Export it from wherever you keep secrets" is only useful to someone who
+# already has a wherever. The refusal has to carry the shape of the command,
+# with this compartment's variable and profile already in it.
+test_missing_key_shows_the_command_that_fixes_it() {
+  write_profile
+  stub_calypsocode_agent
+  launch
+  assert_contains "compartment 'testbox' has no key"
+  assert_contains "set -Ux TEST_KEY"
+  assert_contains "export TEST_KEY="
+  assert_contains "calypsocode --profile default"
+}
+
+# An export lives and dies with one shell. Offering it as *the* fix, with a
+# "then launch" line under it, is a message that stops being true the moment the
+# terminal closes — so the durable form has to be the one named first, and the
+# per-shell one has to say that it is per-shell.
+test_the_fix_says_which_form_survives_a_new_terminal() {
+  write_profile
+  stub_calypsocode_agent
+  launch
+  assert_contains "kept across terminals"
+  assert_contains "this terminal only"
+}
+
+# The launcher is not in the request path, so it never learns that a key was
+# rejected. It must not word the refusal as though it knew.
+test_the_refusal_does_not_claim_to_know_why_the_key_failed() {
+  write_profile
+  stub_calypsocode_agent
+  launch
+  assert_not_contains "revoked"
+  assert_not_contains "expired"
+  assert_not_contains "invalid key"
+}
+
+test_doctor_shows_the_same_command() {
+  write_profile
+  stub_calypsocode_agent
+  run_calypso doctor --profile default
+  assert_status 1
+  assert_contains "\$TEST_KEY is not set in this shell"
+  assert_contains "set -Ux TEST_KEY"
+}
+
 test_identity_environment_reaches_the_agent() {
   write_profile
   stub_calypsocode_agent
