@@ -177,9 +177,17 @@ The same run corroborates F6 from the other direction: an executable placed in
 a `/tmp` subdirectory and added to `PATH` was **not found** inside the
 namespace, because that path does not exist there.
 
-**Consequence.** The session receipt is written from inside the namespace to
-`~/.local/state/calypsocode/` and read on the host. No host-side file handle has
-to be passed in, and nothing may be written to `/tmp`.
+**Consequence.** Results that are only knowable inside the namespace — the Tor exit
+IP, the leak-test verdict, whether the agent started — are written from inside to
+`~/.local/state/calypsocode/` and read on the host. No host-side file handle has to be
+passed in, and nothing may be written to `/tmp`.
+
+> **Correction, 2026-07-26.** This paragraph said "the session receipt is written from
+> inside the namespace". It is not, and never was: `receipt_write` runs on the host,
+> from the `EXIT`/`INT`/`TERM` traps, outside `oniux`. Only the small marker files
+> above cross the boundary. The finding's conclusion — that `$HOME` is the way back
+> out and `/tmp` cannot be used — is unaffected and is what the measurement showed;
+> the sentence describing which file takes that path was wrong when written.
 
 ## F8 — A real agentic session works over Tor, at ~4s per round trip
 

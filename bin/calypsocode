@@ -512,7 +512,11 @@ startup_check() {
   echo "                 the provider knows which customer this is — it is what you pay with"
   if [ "$NETWORK" = "tor" ]; then
     if [ "$VERIFY" = "1" ]; then
-      echo "  network        tor, verified from inside the namespace before launch"
+      # Future tense on purpose. This prints before the confirmation prompt, and the
+      # egress check runs after it — saying "verified" here would assert an
+      # accomplished fact to get consent for the thing that establishes it.
+      echo "  network        tor — egress will be verified from inside the namespace"
+      echo "                 before the agent starts, and the receipt will name the exit"
     else
       echo "  network        tor, NOT verified (--no-verify)"
     fi

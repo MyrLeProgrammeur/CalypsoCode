@@ -30,9 +30,11 @@ tool. See [DESIGN.md](DESIGN.md#the-boundary).
 - **Accidental network leaks.** Unlike an `HTTPS_PROXY` export that programs can
   ignore, namespace isolation is fail-closed at the kernel routing level even if
   the wrapped program misbehaves. This is the strongest property in the stack.
-- **Machine and account metadata.** Locale, timezone, hostname, git author
-  identity, and your agent's global config are set or replaced per compartment
-  before launch, so the identifying values are never produced.
+- **Machine and account metadata.** Locale, timezone, git author identity, and your
+  agent's global config are set or replaced per compartment before launch, so the
+  identifying values are never produced. **Not the hostname** — this document listed
+  it here until 2026-07-26 and the launcher has never set it
+  ([why](DESIGN.md#every-signal-decided)).
 - **Cross-project linkage.** Compartments bind one key to one circuit to one
   config, so a breach of one does not expose the others.
 

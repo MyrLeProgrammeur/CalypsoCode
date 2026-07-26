@@ -7,11 +7,12 @@ identity, environment metadata, agent config — from what your coding agent
 transmits, and reports per session what it removed and what it did not.
 
 > **Status: it works, and the premise has been measured once.** A real coding
-> session ran end-to-end through the launcher over Tor — 8 round trips, 3.8s
-> mean, 0 failures ([the gate](docs/ROADMAP.md#gate)). That is an existence
-> proof, not a track record: one task, one provider, one day. What a single
-> session cannot show — how a provider reacts to Tor-origin traffic over weeks,
-> how the latency feels on a large repository — is listed in
+> session ran end-to-end through the launcher over Tor on the agent this project
+> actually ships — 4 round trips, 3.6s mean, 0 failures
+> ([F12](docs/FINDINGS.md#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor)).
+> That is an existence proof, not a track record: one task, one provider, one day.
+> What a single session cannot show — how a provider reacts to Tor-origin traffic
+> over weeks, how the latency feels on a large repository — is listed in
 > [docs/FINDINGS.md](docs/FINDINGS.md#still-untested).
 
 ## The idea
@@ -48,12 +49,8 @@ One launch = one namespace = one circuit. One compartment = one key = one
 config = one identity, and it persists across launches. Nothing crosses between
 compartments.
 
-This is for people whose **network is observed** while their account is not the
-threat: developers in censoring jurisdictions, people whose employer or ISP
-monitors what they connect to, people where certain questions are dangerous to
-be seen asking. Your provider still knows which customer is paying. What the
-observer between you and the provider learns is nothing — including which model
-you chose, uncensored or otherwise.
+Your provider still knows which customer is paying. What an observer between you
+and the provider learns is nothing — including which model you chose.
 
 ## Install
 

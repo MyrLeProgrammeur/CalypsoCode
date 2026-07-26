@@ -32,6 +32,28 @@ code stays AGPL-3.0, same as the rest of the project.
   states its evidence, and untested things are marked untested. Do not add
   inferences to that file — they belong in `DESIGN.md`.
 
+### Correcting a finding
+
+F-entries are dated measurements, so the instinct to edit one until it agrees with
+today is exactly wrong. But "never touch them" is also wrong, because some of them
+have been plainly false. **Correct errors, never edit measurements.** Three cases:
+
+1. **The world changed.** Leave it. The entry is a snapshot and is accurate for its
+   date — F6 describes a LiteLLM log path the launcher stopped writing, and that is
+   fine. If the staleness genuinely misleads, a *new* entry says what changed.
+2. **The sentence was false when written.** Correct it in place, in a blockquote
+   marked `**Correction, <date>.**`, quoting what the original said and what is
+   actually true. The reader sees the error and the correction, which is worth more
+   than a clean page. F7 and F12 both carry one.
+3. **The measurement is right but the entry over-reads it.** Write a *new* entry
+   measuring what the old one did not, and point to it from the old. Do not touch
+   the numbers — they are what was observed. F12's `3 private target(s)` is true as
+   printed; F14 is why it was not evidence.
+
+The test for which case you are in: could the original author have known? If yes, it
+is case 2. If the world moved, case 1. If the number is right and the conclusion
+drawn from it was not, case 3.
+
 ## Git conventions
 
 **Branches.** `main` is protected: no direct pushes, CI green to merge. Work
