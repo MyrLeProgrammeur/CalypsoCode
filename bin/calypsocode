@@ -46,6 +46,7 @@ calypsocode — run a coding agent under a compartment identity.
 
 usage:
   calypsocode [--profile NAME] [agent args...]
+  calypsocode --new-profile NAME [--from NAME]
   calypsocode profile [--profile NAME]
   calypsocode doctor
   calypsocode --help
@@ -53,6 +54,14 @@ usage:
 options:
   --profile NAME   compartment to launch (default: default). Resolved to
                    ~/.config/calypsocode/profiles/NAME.env
+  --new-profile NAME
+                   write a new profile, then stop. It never launches: naming a
+                   profile that does not exist has to report that, not quietly
+                   build a compartment under the typo.
+  --from NAME      only with --new-profile. Copies the network and the provider
+                   from an existing profile. The key variable and the git
+                   identity are always asked for again — sharing either would
+                   make the two compartments one customer to the provider.
   --no-verify      skip the egress check AND the leak test. Both cost a few
                    seconds; skipping them means the session runs with no
                    evidence that it is isolated, and the receipt says so.
@@ -112,61 +121,106 @@ backend_state() {
   esac
 }
 
-# Shown once, when there is no profile to load. Everything it asks goes into a
-# profile file and nowhere else: a remembered choice living somewhere other than
-# the profile is how a profile that says `tor` ends up running something else.
+# Writes a profile, then stops. Reached only from --new-profile, never from the
+# launch path: creating a compartment and entering one are separate acts, and a
+# launcher that merges them turns a mistyped --profile into a new compartment
+# instead of an error. Everything it asks goes into a profile file and nowhere
+# else: a remembered choice living somewhere other than the profile is how a
+# profile that says `tor` ends up running something else.
 profile_create() {
-  local name="$1"
-  local answer network api_base model key_env git_name git_email compartment
+  local name="$1" from="${2:-}"
+  local answer network api_base model models key_env git_name git_email compartment
+  local file="$PROFILE_DIR/$name.env"
 
-  echo "No profile named '$name' yet. Let's make one."
-  echo "It will be written to $PROFILE_DIR/$name.env and read on every launch."
-  echo
-  echo "Network backend. This decides who can see that you are talking to a"
-  echo "provider at all. It has no effect on what the provider itself can read —"
-  echo "that is a property of the provider you choose, not of this tool."
-  echo
-  echo "  1) tor     Traffic leaves through Tor. The provider sees a Tor exit"
-  echo "             instead of your address; your ISP sees only that you use Tor."
-  echo "             [$(backend_state tor)]"
-  echo "  2) none    No isolation whatsoever. Your real address reaches the"
-  echo "             provider. For testing the rest of the compartment."
-  echo "             [$(backend_state none)]"
-  echo "  3) vpn     WireGuard inside the namespace. [$(backend_state vpn)]"
-  echo "  4) direct  Plain namespace, no anonymity. [$(backend_state direct)]"
-  echo "  5) socks   A SOCKS endpoint you run yourself. [$(backend_state socks)]"
-  echo "             Note for later: this is not \"Tor but faster\". Whatever"
-  echo "             anonymity it gives is a property of the endpoint you supply."
-  echo
+  # The name becomes a path. Anything that could climb out of the profile
+  # directory, or hide from a listing, is refused rather than quietly repaired.
+  case "$name" in
+    '' | *[!A-Za-z0-9._-]* | .* | -*)
+      die "profile name '$name' — letters, digits, dot, dash and underscore only, and not starting with '.' or '-'."
+      ;;
+  esac
+  if [ -e "$file" ]; then
+    die "profile '$name' already exists: $file
+  → edit that file, or choose another name."
+  fi
+  [ -t 0 ] || die "--new-profile has questions to ask, and this is not a terminal."
 
   network=""
-  while [ -z "$network" ]; do
-    printf 'Backend [1]: '
-    read -r answer || true
-    case "${answer:-1}" in
-      1 | tor)
-        command -v oniux >/dev/null 2>&1 \
-          || { echo "  oniux is not installed — cargo install --git https://gitlab.torproject.org/tpo/core/oniux"; continue; }
-        network="tor"
-        ;;
-      2 | none) network="none" ;;
-      3 | 4 | 5 | vpn | direct | socks)
-        echo "  Not built yet — see docs/ROADMAP.md. Pick 1 or 2."
-        ;;
-      *) echo "  Not one of the options." ;;
-    esac
-  done
+  api_base=""
+  model=""
+  models=""
+
+  # --from copies what describes the provider and nothing that identifies you.
+  # Two compartments sharing a key or a git identity are one compartment from
+  # the provider's side, so those are always asked for again.
+  if [ -n "$from" ]; then
+    profile_load "$from"
+    network="$P_NETWORK"
+    api_base="$P_API_BASE"
+    model="$P_MODEL"
+    models="$P_MODELS"
+    PROFILE_FILE=""
+    echo "Copying '$from': network $network, $api_base, model $model."
+    echo "Not copied: the key variable and the git identity. Reusing either would"
+    echo "make this compartment the same customer as '$from' to the provider."
+    echo
+  else
+    echo "Writing a new profile named '$name'."
+    echo "It goes to $file and is read on every launch."
+    echo
+  fi
+
+  if [ -z "$network" ]; then
+    echo "Network backend. This decides who can see that you are talking to a"
+    echo "provider at all. It has no effect on what the provider itself can read —"
+    echo "that is a property of the provider you choose, not of this tool."
+    echo
+    echo "  1) tor     Traffic leaves through Tor. The provider sees a Tor exit"
+    echo "             instead of your address; your ISP sees only that you use Tor."
+    echo "             [$(backend_state tor)]"
+    echo "  2) none    No isolation whatsoever. Your real address reaches the"
+    echo "             provider. For testing the rest of the compartment."
+    echo "             [$(backend_state none)]"
+    echo "  3) vpn     WireGuard inside the namespace. [$(backend_state vpn)]"
+    echo "  4) direct  Plain namespace, no anonymity. [$(backend_state direct)]"
+    echo "  5) socks   A SOCKS endpoint you run yourself. [$(backend_state socks)]"
+    echo "             Note for later: this is not \"Tor but faster\". Whatever"
+    echo "             anonymity it gives is a property of the endpoint you supply."
+    echo
+
+    while [ -z "$network" ]; do
+      printf 'Backend [1]: '
+      read -r answer || true
+      case "${answer:-1}" in
+        1 | tor)
+          command -v oniux >/dev/null 2>&1 \
+            || { echo "  oniux is not installed — cargo install --git https://gitlab.torproject.org/tpo/core/oniux"; continue; }
+          network="tor"
+          ;;
+        2 | none) network="none" ;;
+        3 | 4 | 5 | vpn | direct | socks)
+          echo "  Not built yet — see docs/ROADMAP.md. Pick 1 or 2."
+          ;;
+        *) echo "  Not one of the options." ;;
+      esac
+    done
+  fi
+
+  if [ -z "$api_base" ]; then
+    echo
+    echo "Your provider. Calypso does not recommend one and never sends anything"
+    echo "on your behalf — it only points the agent at what you choose."
+    printf 'API base URL (OpenAI-compatible): '
+    read -r api_base || true
+    [ -n "$api_base" ] || die "an API base URL is required."
+    printf 'Model: '
+    read -r model || true
+    [ -n "$model" ] || die "a model is required."
+    printf 'Extra models for the in-session picker, comma-separated (optional): '
+    read -r models || true
+  fi
 
   echo
-  echo "Your provider. Calypso does not recommend one and never sends anything"
-  echo "on your behalf — it only points the agent at what you choose."
-  printf 'API base URL (OpenAI-compatible): '
-  read -r api_base || true
-  [ -n "$api_base" ] || die "an API base URL is required."
-  printf 'Model: '
-  read -r model || true
-  [ -n "$model" ] || die "a model is required."
-
   printf 'Name of the environment variable holding your key [CALYPSO_API_KEY]: '
   read -r key_env || true
   key_env="${key_env:-CALYPSO_API_KEY}"
@@ -184,24 +238,39 @@ profile_create() {
 
   mkdir -p "$PROFILE_DIR"
   umask 077
-  cat > "$PROFILE_FILE" <<EOF
-# Written by \`calypsocode\` on $(date -u +%Y-%m-%d). Edit freely.
-PROFILE=$compartment
-NETWORK=$network
-API_KEY_ENV=$key_env
-API_BASE=$api_base
-MODEL=$model
-GIT_NAME=$git_name
-GIT_EMAIL=$git_email
-EOF
+  {
+    echo "# Written by \`calypsocode --new-profile $name\` on $(date -u +%Y-%m-%d). Edit freely."
+    echo "PROFILE=$compartment"
+    echo "NETWORK=$network"
+    echo "API_KEY_ENV=$key_env"
+    echo "API_BASE=$api_base"
+    echo "MODEL=$model"
+    if [ -n "$models" ]; then echo "MODELS=$models"; fi
+    echo "GIT_NAME=$git_name"
+    echo "GIT_EMAIL=$git_email"
+  } > "$file"
 
   echo
-  echo "Written: $PROFILE_FILE"
+  echo "Written: $file"
   if [ "$network" = "none" ]; then
     echo "Reminder: NETWORK=none means no isolation at all."
   fi
   echo "Your key is never stored here — only the name of the variable holding it."
+  echo "  export \$$key_env, then: calypsocode --profile $name"
   echo
+}
+
+# The profiles that exist, for the message shown when one does not. A mistyped
+# --profile is the common way to get here, and seeing the real names beside the
+# typo is what identifies it.
+profile_list() {
+  local f base found=""
+  for f in "$PROFILE_DIR"/*.env; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"
+    found="${found:+$found, }${base%.env}"
+  done
+  printf '%s' "${found:-none yet}"
 }
 
 # Parses KEY=value lines into P_<KEY> shell variables. The file is read, never
@@ -211,19 +280,15 @@ profile_load() {
   local name="$1"
   PROFILE_FILE="$PROFILE_DIR/$name.env"
 
-  # No profile and someone to ask: offer to build one. With --yes, or without a
-  # terminal, refuse instead — picking a backend on the user's behalf is exactly
-  # the silent default this tool exists to avoid.
-  if [ ! -f "$PROFILE_FILE" ] \
-    && [ -z "$COMMAND" ] && [ "$ASSUME_YES" != "1" ] && [ -t 0 ]; then
-    profile_create "$name"
-  fi
-
+  # A missing profile is an error and never an invitation. Creating one from
+  # here would mean a mistyped --profile silently builds a compartment under
+  # the typo instead of reporting it; --new-profile exists so that creating is
+  # something you ask for.
   if [ ! -f "$PROFILE_FILE" ]; then
     die "profile '$name' not found: $PROFILE_FILE
-  → run 'calypsocode' with a terminal and it will offer to create one,
-    or copy config/profile.example.env to that path and edit it,
-    or select another profile with --profile NAME."
+  → create it:  calypsocode --new-profile $name
+  → or copy:    config/profile.example.env to that path and edit it
+  → existing:   $(profile_list)"
   fi
 
   local lineno=0 line key value var
@@ -287,6 +352,22 @@ profile_load() {
   esac
 }
 
+# Printed wherever the key is missing. The launcher never sees the provider's
+# answer — it is not in the request path — so it cannot tell an absent key from
+# a revoked or expired one, and does not pretend to: it names the variable and
+# the profile, and leaves the diagnosis to the provider.
+#
+# It cannot name the command that fetches the secret either, because that is the
+# user's secret store and this tool deliberately does not have one. The shape is
+# what is missing today, not the tool.
+key_help() {
+  echo "  The profile names the variable, never the value."
+  echo "    fish       set -Ux $P_API_KEY_ENV <key>    — kept across terminals"
+  echo "    bash/zsh   export $P_API_KEY_ENV=<key>     — this terminal only"
+  echo "  Then:        calypsocode --profile $PROFILE_NAME"
+  echo "  The same line replaces a key the provider has stopped accepting."
+}
+
 profile_show() {
   echo "profile:      $P_PROFILE"
   echo "file:         $PROFILE_FILE"
@@ -309,6 +390,7 @@ profile_show() {
     echo "api key:      \$$P_API_KEY_ENV is set"
   else
     echo "api key:      \$$P_API_KEY_ENV is NOT set in this shell"
+    key_help
   fi
 }
 
@@ -749,6 +831,7 @@ doctor() {
     echo "  ok    \$$P_API_KEY_ENV is set"
   else
     echo "  FAIL  \$$P_API_KEY_ENV is not set in this shell"
+    key_help
     failed=1
   fi
 
@@ -770,6 +853,11 @@ doctor() {
 # --- argument parsing ------------------------------------------------------
 
 PROFILE_NAME="default"
+# Whether --profile was actually typed, rather than defaulted. Only needed to
+# refuse --profile and --new-profile together instead of ignoring one of them.
+PROFILE_EXPLICIT=0
+NEW_PROFILE=""
+FROM_PROFILE=""
 COMMAND=""
 VERIFY=1
 ASSUME_YES=0
@@ -795,10 +883,30 @@ while [ $# -gt 0 ]; do
     --profile)
       [ $# -ge 2 ] || die "--profile needs a name"
       PROFILE_NAME="$2"
+      PROFILE_EXPLICIT=1
       shift 2
       ;;
     --profile=*)
       PROFILE_NAME="${1#--profile=}"
+      PROFILE_EXPLICIT=1
+      shift
+      ;;
+    --new-profile)
+      [ $# -ge 2 ] || die "--new-profile needs a name"
+      NEW_PROFILE="$2"
+      shift 2
+      ;;
+    --new-profile=*)
+      NEW_PROFILE="${1#--new-profile=}"
+      shift
+      ;;
+    --from)
+      [ $# -ge 2 ] || die "--from needs a profile name"
+      FROM_PROFILE="$2"
+      shift 2
+      ;;
+    --from=*)
+      FROM_PROFILE="${1#--from=}"
       shift
       ;;
     --no-verify)
@@ -833,6 +941,20 @@ if [ -n "$COMMAND" ] && [ ${#AGENT_ARGS[@]} -gt 0 ]; then
   die "$COMMAND takes no arguments other than --profile"
 fi
 
+# Creating exits here. Nothing below this block runs for --new-profile: writing
+# a profile must not be able to slide into launching one.
+if [ -n "$NEW_PROFILE" ]; then
+  [ -z "$COMMAND" ] || die "--new-profile does not combine with '$COMMAND'."
+  [ ${#AGENT_ARGS[@]} -eq 0 ] || die "--new-profile takes no agent arguments."
+  [ "$PROFILE_EXPLICIT" = 0 ] \
+    || die "--new-profile names a profile to write and --profile one to launch. Pass one of them."
+  [ "$ASSUME_YES" = 0 ] || die "--new-profile has questions to ask, and --yes cannot answer them."
+  profile_create "$NEW_PROFILE" "$FROM_PROFILE"
+  exit 0
+fi
+
+[ -z "$FROM_PROFILE" ] || die "--from only means something together with --new-profile."
+
 profile_load "$PROFILE_NAME"
 
 # Resolved before the subcommand dispatch, not after: `profile` and `doctor` report on
@@ -860,8 +982,8 @@ esac
 
 API_KEY_VALUE="${!P_API_KEY_ENV:-}"
 if [ -z "$API_KEY_VALUE" ]; then
-  die "\$$P_API_KEY_ENV is empty or unset — this compartment has no key.
-  Export it from wherever you keep secrets, then run again."
+  die "\$$P_API_KEY_ENV is empty or unset — compartment '$P_PROFILE' has no key.
+$(key_help)"
 fi
 
 compartment_prepare
