@@ -399,6 +399,76 @@ request happens.
 a measured, concrete client fingerprint reaching every generic
 OpenAI-compatible provider CalypsoCode talks to.
 
+## F12 — The compiled `calypsocode-agent` holds a real session over Tor
+
+**Status: confirmed. Measured 2026-07-26.** This is the gate for the fork, the way
+[F8](#f8--a-real-agentic-session-works-over-tor-at-4s-per-round-trip) was the gate
+for the launcher. F8 ran upstream OpenCode 1.18.4; nothing until now had shown the
+fork works against a real provider, only against a local stub.
+
+The agent was the **compiled binary** — `bun build --compile`, version
+`0.0.0-dev-202607261100`, 180MB, self-contained, invoked through
+`~/.local/bin/calypsocode-agent`. The launcher was invoked by name from outside
+both repositories, so this also exercises the symlink install.
+
+Same task as F8, deliberately, so the numbers compare: write `fizzbuzz.py`, run it
+with `python3` to check it, write a `README.md`. The agent completed it correctly
+and the script produces correct output.
+
+| | |
+|---|---|
+| Wall clock | 19s, including egress verification |
+| Assistant round trips | 4 (plus 1 title-generation call) |
+| Round trip min / mean / max | 1.7s / 3.6s / 7.9s |
+| Failed requests during the session | 0 |
+| Tokens | 14.9K in, 268 out, 43.6K cache read |
+| Exit | 185.220.100.249, verified `IsTor` before launch |
+| Receipt | written, with Tor exit, `leak test passed — 3 private target(s)`, and a non-zero duration |
+
+Round trips were counted from the agent's own log: each `message=stream` line is
+one request, and each is bounded by the next `message=loop step=N`. The last one is
+bounded by the session's `time_updated`. F8 reported 8 round trips for this task
+and this run took 4 — same task, different model behaviour on the day, not a
+measured improvement in anything.
+
+**Three failures preceded it, and the cause was the test, not the tool.** The first
+three attempts ran with the project directory under `/tmp`. All three failed
+identically: leak test passed, egress verified, then `UnknownError / "Unexpected
+server error"` from the agent's own server before any inference completed. The
+agent's log named it — `Failed to init file picker: Invalid path
+/tmp/calypso-gate-f12`. oniux gives the namespace a private `/tmp`
+([F6](#f6--oniux-uses-a-private-tmp-by-default),
+[F7](#f7--home-is-shared-with-the-host-only-tmp-is-private)), so a project
+directory under `/tmp` does not exist inside the namespace and the agent
+bootstraps into nothing. Moving the project to `$HOME` fixed it with no code
+change. **A cwd under `/tmp` cannot work by design, and the failure gives no hint
+of why** — the error surfaces as an opaque server error with a ref.
+
+**The provider was ruled out before the agent was blamed**, because the error
+message pointed nowhere. Over the same Tor path: `GET /models` returned HTTP 200 in
+2.0s with `zai-org-glm-5-1` still present among 106 models, and a minimal
+authenticated `POST /chat/completions` returned HTTP 200 in 11.1s, billed
+(`"cost":{"usd":0.001554366}`). The from-source build failed identically to the
+compiled one, which is what ruled out the compile as the cause.
+
+**Caveats, stated plainly:**
+
+- One task, one provider, one session, one day — an existence proof for the fork,
+  not a latency distribution. Same limit F8 stated.
+- `cost` came back `0.0` in the agent's own session record even though Venice
+  returned a cost field on the direct request above. The fork's generic provider
+  path does not appear to parse it. Unexplained, not investigated.
+- The receipt correctly flagged `OS username 'matheo' is in your project path`,
+  because `$HOME` was the only place the session could run. The `/tmp` workaround
+  for that leak is unavailable inside the namespace — the two mitigations conflict.
+- This says nothing about the `User-Agent` the compiled binary puts on the wire.
+  No logging endpoint was involved in this run, so the compiled-binary question
+  raised in `DESIGN.md` remains open.
+
+**Consequence.** The fork is usable, not just buildable. The launcher's install
+path, the compiled binary, the leak test, the egress check and the receipt all
+work together in one real session.
+
 ---
 
 ## Still untested
@@ -433,3 +503,13 @@ what one session cannot show.
    (`opencode.json` / plugin) without forking at all — Batch 5 assumes a fork
    is required, but that has not been checked against upstream's config
    surface.
+6. **What the compiled binary actually sends as its `User-Agent`.** The fork stops
+   setting one on the generic provider branch, and the from-source build was
+   measured sending the SDK's default with no product token. But the compile bakes
+   in `--user-agent=opencode/<version>` as Bun's default
+   (`packages/opencode/script/build.ts`), and
+   [F12](#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor)
+   involved no logging endpoint, so the compiled binary's headers have never been
+   observed. Whether the baked-in default ever reaches a provider depends on the
+   SDK setting the header explicitly on every request — likely, unverified.
+   Repeating F11's method against the compiled binary would settle it.
