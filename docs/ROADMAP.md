@@ -67,12 +67,16 @@ Everything in v1 is environment configuration. There is no proxy, no traffic
 inspection, and no content rewriting — see
 [the boundary](DESIGN.md#why-this-boundary-and-not-a-wider-one).
 
-1. **Profiles and compartments.** One launch = one namespace = one circuit. One
+1. **Profiles and compartments.** One launch = one namespace — but not one circuit:
+   Tor rotates inside it, measured at three exits in 27 minutes, and whether to hold
+   one is the first of the two open questions below. One
    compartment = one key = one config = one identity, persisting across
    launches. Independent of the gate, immediately useful.
-2. **Identity configuration.** `LC_ALL`, `TZ`, hostname, git author/committer,
+2. **Identity configuration.** `LC_ALL`, `TZ`, git author/committer,
    per-compartment `XDG_CONFIG_HOME`. Each is one line and removes a signal at
-   its source.
+   its source. **Not the hostname** — it was listed here and never implemented;
+   `oniux` offers no UTS namespace, so it would take `unshare --uts` around the
+   launch ([DESIGN](DESIGN.md#every-signal-decided)).
 3. **Startup check.** Once, before anything is sent: is the git identity the
    compartment's? Does the project path contain the OS username? Report, then
    get out of the way.

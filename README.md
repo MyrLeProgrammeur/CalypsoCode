@@ -45,9 +45,12 @@ choosing a default — a backend selected on your behalf is a leak with a friend
 face. The answers go into the profile and nowhere else, so there is never a
 second place a backend choice could hide.
 
-One launch = one namespace = one circuit. One compartment = one key = one
-config = one identity, and it persists across launches. Nothing crosses between
-compartments.
+One launch = one namespace. One compartment = one key = one config = one
+identity, and it persists across launches. Nothing crosses between compartments.
+
+Not one circuit, though: Tor rotates inside the namespace — measured at three
+distinct exits in 27 minutes. Whether to hold one instead is an open question with
+a real trade, recorded in [ROADMAP step 5](docs/ROADMAP.md#build-order).
 
 Your provider still knows which customer is paying. What an observer between you
 and the provider learns is nothing — including which model you chose.
