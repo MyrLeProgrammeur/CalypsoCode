@@ -80,9 +80,10 @@ environment:
   CALYPSO_NETWORK  override the profile's NETWORK for one run. `none` disables
                    isolation entirely and is warned about on every launch.
 
-One launch is one namespace and one circuit. One compartment is one key, one
-config and one identity, persisting across launches. Nothing crosses between
-compartments — see docs/DESIGN.md.
+One launch is one namespace. One compartment is one key, one config and one
+identity, persisting across launches. Nothing crosses between compartments.
+Tor rotates the circuit inside the namespace — the receipt names the exit the
+egress check saw, not one held for the session. See docs/DESIGN.md.
 EOF
 }
 

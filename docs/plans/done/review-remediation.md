@@ -1,5 +1,9 @@
 # Plan — Close the evidence chain and stop the phone-homes
 
+> Executed 2026-07-26, all 9 batches, merged as PR #9 with the fork's half as
+> `6e1da0e`. Its one remaining open question — circuit pinning versus rotation —
+> moved to `docs/ROADMAP.md` under the network backend, where the decision belongs.
+
 > Executor: Sonnet or Opus + subagents. Apply the decisions, do not re-litigate
 > them. Unresolved doubt → stop and ask.
 
