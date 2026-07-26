@@ -290,7 +290,15 @@ profile_load() {
 profile_show() {
   echo "profile:      $P_PROFILE"
   echo "file:         $PROFILE_FILE"
-  echo "network:      $P_NETWORK"
+  # The effective value, not the file's. An override in force and a report showing
+  # the profile's own setting is a backend choice hiding in a second place, which is
+  # exactly what the picker refuses to allow.
+  if [ "${NETWORK:-$P_NETWORK}" != "$P_NETWORK" ]; then
+    echo "network:      ${NETWORK:-$P_NETWORK} — overridden for this run by \$CALYPSO_NETWORK"
+    echo "              (the profile says $P_NETWORK)"
+  else
+    echo "network:      $P_NETWORK"
+  fi
   echo "api_base:     $P_API_BASE"
   echo "model:        $P_MODEL"
   if [ -n "$P_MODELS" ]; then
@@ -325,6 +333,12 @@ json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
+  # Interior tabs and newlines survive `trim`, which only strips the edges, and an
+  # unescaped one produces a config the agent cannot parse — surfacing as an opaque
+  # agent error rather than as the profile typo it is.
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
   printf '%s' "$s"
 }
 
@@ -656,7 +670,11 @@ receipt_write() {
     echo "Calypso is not in the request path, so this states session facts, not"
     echo "contents. It cannot count requests or tell you what was sent — by design:"
     echo "reading your traffic to report on it is the thing it refuses to do."
-  } > "$receipt"
+  } > "$receipt.partial"
+  # Atomic: a second Ctrl-C landing mid-write would otherwise leave a truncated
+  # receipt with nothing marking it truncated. This is the one document whose job is
+  # to be true, so it appears whole or not at all.
+  mv -f "$receipt.partial" "$receipt"
 
   cat "$receipt" >&2
   echo >&2
@@ -817,6 +835,16 @@ fi
 
 profile_load "$PROFILE_NAME"
 
+# Resolved before the subcommand dispatch, not after: `profile` and `doctor` report on
+# the compartment, and reporting the file's value while an override is in force would
+# put a backend choice in a second place — the thing the picker's design exists to
+# prevent.
+NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
+case "$NETWORK" in
+  tor | none) ;;
+  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
+esac
+
 case "$COMMAND" in
   profile)
     profile_show
@@ -829,12 +857,6 @@ case "$COMMAND" in
 esac
 
 # --- launch ----------------------------------------------------------------
-
-NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
-case "$NETWORK" in
-  tor | none) ;;
-  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
-esac
 
 API_KEY_VALUE="${!P_API_KEY_ENV:-}"
 if [ -z "$API_KEY_VALUE" ]; then

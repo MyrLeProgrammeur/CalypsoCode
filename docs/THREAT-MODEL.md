@@ -164,6 +164,12 @@ A shared default makes everyone look alike, which is the point.
 - Keep compartments genuinely separate. Opening client A's repo inside client
   B's profile defeats the design — the content links them even when the key and
   circuit do not.
+- **Do not run two sessions of the same compartment at once.** They share one
+  compartment directory and therefore one agent state tree, and the session counter
+  in the receipt will lose one of the two. This is documented rather than locked
+  deliberately: a lock file would fix the counter and not the shared state, at the
+  cost of three new ways to fail. Different compartments in parallel are fine — that
+  is what compartments are.
 - Name your project folders with the knowledge that those names are
   transmitted. `client-acme` will be sent; that is your choice to make.
 - Stay mindful of what you write in your prompts. Calypso does not touch them.
