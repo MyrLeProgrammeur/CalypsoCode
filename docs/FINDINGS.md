@@ -458,9 +458,15 @@ compiled one, which is what ruled out the compile as the cause.
 - `cost` came back `0.0` in the agent's own session record even though Venice
   returned a cost field on the direct request above. The fork's generic provider
   path does not appear to parse it. Unexplained, not investigated.
-- The receipt correctly flagged `OS username 'matheo' is in your project path`,
-  because `$HOME` was the only place the session could run. The `/tmp` workaround
-  for that leak is unavailable inside the namespace — the two mitigations conflict.
+- The receipt correctly flagged `OS username 'matheo' is in your project path` —
+  the session ran under `$HOME` because the three attempts before it had been run
+  under `/tmp`. **Correction:** an earlier version of this entry said the
+  documented mitigation for that leak was unavailable inside the namespace, and
+  that the two mitigations conflicted. That was wrong and is withdrawn.
+  [THREAT-MODEL](THREAT-MODEL.md#keep-your-username-out-of-your-paths) recommends
+  a directory outside home (`/srv/dev`) or a neutral account, never `/tmp`, and
+  both work inside the namespace — only `/tmp` is private (F6, F7). There is no
+  conflict.
 - This says nothing about the `User-Agent` the compiled binary puts on the wire.
   No logging endpoint was involved in this run, so the compiled-binary question
   raised in `DESIGN.md` remains open.

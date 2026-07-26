@@ -384,11 +384,20 @@ leak_targets() {
   } | awk '!/^169\.254\.42\./' | sort -u || true
 }
 
+# The neutral account names THREAT-MODEL.md documents. If the username IS the
+# convention, then finding it in a path is the recommended state and not a leak:
+# warning about it would train the reader to ignore the line, which is the line
+# that matters on the day the path really does carry their name.
+NEUTRAL_USERNAMES=(user dev)
+
 # The path leak Calypso does not fix. Convention handles it; the receipt states
 # it. See docs/THREAT-MODEL.md#keep-your-username-out-of-your-paths.
 path_leaks_username() {
-  local user
+  local user u
   user="$(os_username)"
+  for u in "${NEUTRAL_USERNAMES[@]}"; do
+    if [ "$user" = "$u" ]; then return 1; fi
+  done
   case "$PWD" in
     *"$user"*) return 0 ;;
     *) return 1 ;;
@@ -443,7 +452,7 @@ startup_check() {
     echo "  project path   $PWD"
     echo "                 contains your OS username '$user' — the agent will read and send it"
   else
-    echo "  project path   $PWD — no OS username in it"
+    echo "  project path   $PWD — nothing identifying in it"
   fi
 
   if [ "$ASSUME_YES" = "1" ]; then

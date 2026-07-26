@@ -67,6 +67,28 @@ test_generated_agent_config_matches_the_profile() {
   grep -q '"model": "calypsocode/test-model"' "$cfg" || _fail "model not from profile"
 }
 
+# The path leak Calypso does not fix, so the least it can do is say so. Uses the
+# real username rather than a fixture, because that is what the check reads and a
+# fixture would pass while the real thing broke.
+#
+# The mirror case — a username that IS the documented neutral convention, where
+# the warning must NOT appear — is not covered here: the suite cannot change what
+# `id -un` returns, and giving the launcher an env var to override its own idea of
+# your username would put a switch in a privacy tool that can hide a real leak.
+test_username_in_the_project_path_is_reported() {
+  write_profile
+  stub_calypsocode_agent
+  local dir
+  dir="$CALYPSO_HOME/$(id -un)-project"
+  mkdir -p "$dir"
+  local back="$PWD"
+  cd "$dir" || _fail "could not enter the test project directory"
+  TEST_KEY=k launch
+  cd "$back" || true
+  assert_status 0
+  assert_contains "contains your OS username"
+}
+
 # MODELS exists so the agent's own picker has something to pick from: the
 # generated config used to list exactly one model, which made that picker
 # useless inside a compartment.
