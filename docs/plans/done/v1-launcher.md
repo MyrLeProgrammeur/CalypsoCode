@@ -1,5 +1,7 @@
 # Plan — CalypsoCode v1 launcher
 
+> Executed. Merged into main via PR #1.
+
 > Executor: Sonnet or Opus + subagents. Apply the decisions, do not re-litigate them. Unresolved doubt → stop and ask.
 
 ## Goal & scope

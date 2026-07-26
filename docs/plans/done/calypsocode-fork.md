@@ -1,5 +1,7 @@
 # Plan — Fork OpenCode into CalypsoCode
 
+> Executed, as part of calypsocode-ui-rebrand.md.
+
 > Executor: Sonnet or Opus + subagents. Apply the decisions, do not re-litigate
 > them. Unresolved doubt → stop and ask.
 

@@ -78,7 +78,7 @@ OpenRouter-specific conventions this generic provider path doesn't use — but
 the `User-Agent` alone is a concrete, verified client fingerprint. That is why
 the row stays ⚠️ partial rather than ✅: the header is a known, now-measured
 gap that the fork's Batch 5
-(`docs/plans/calypsocode-ui-rebrand.md#batch-5--tier-2-de-brand-the-wire-conditional-on-batch-1`)
+(`docs/plans/done/calypsocode-ui-rebrand.md#batch-5--tier-2-de-brand-the-wire-conditional-on-batch-1`)
 removes or neutralises; the TLS/JA3 fingerprint underneath the header is a
 separate, still-untested dimension of "partial" — Calypso changes the network
 path (Tor), not the TLS client stack's own signature.

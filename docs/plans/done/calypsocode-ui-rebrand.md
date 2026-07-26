@@ -1,5 +1,9 @@
 # Plan — CalypsoCode UI Rebrand
 
+> Executed 2026-07-26, all 6 batches. Settled decision 8 amended: blue `#4C8DFF`
+> was dropped from the palette in fork commit `8835df0`; shipped palette is
+> violet `#8b4cff` ↔ pink `#ff2e97`.
+
 > Executor: Sonnet or Opus + subagents. Apply the decisions, do not re-litigate
 > them. Unresolved doubt → stop and ask.
 
