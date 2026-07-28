@@ -211,6 +211,14 @@ runtime dependency. The file is **read, never sourced** — a config file must n
 be able to run code. Unknown keys are refused rather than ignored, so a typo
 fails loudly instead of silently dropping a compartment boundary.
 
+Values must be printable: C0 control characters and DEL are refused when the
+profile loads. Each value has three destinations that disagree about what a
+control character means — the agent's JSON config, the terminal, and the
+receipt — so an ESC that is an escape sequence in one is literal text in
+another, and a receipt could be made to render a compartment it does not
+describe. Refusing at the boundary leaves one rule instead of one per consumer.
+Printable Unicode is untouched.
+
 The key itself stays out of the file, which lives in a config directory that
 tends to end up in backups and dotfile repos. The profile names the environment
 variable; the user exports it from wherever they keep secrets.

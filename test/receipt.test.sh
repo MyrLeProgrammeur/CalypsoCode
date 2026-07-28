@@ -7,7 +7,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/helpers.sh"
 
 # shellcheck disable=SC2120  # arguments are optional
 launch() {
-  CALYPSO_NETWORK=none run_calypso --profile default --yes "$@"
+  run_calypso --profile default --network none --yes "$@"
 }
 
 test_completed_session_leaves_a_receipt() {
@@ -16,6 +16,31 @@ test_completed_session_leaves_a_receipt() {
   TEST_KEY=k launch
   assert_status 0
   assert_equals "$(receipt_count)" "1"
+}
+
+# "network: none" alone reads like the compartment was always configured that
+# way. The receipt has to carry both values, or it hides that this particular
+# run departed from the compartment on purpose.
+test_receipt_records_the_configured_backend_alongside_the_effective_one() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch
+  case "$(receipt_body)" in
+    *"configured tor, run with --network none"*) ;;
+    *) _fail "the receipt should name both backends" "$(receipt_body)" ;;
+  esac
+}
+
+test_receipt_says_nothing_about_an_override_that_did_not_happen() {
+  write_profile default 'NETWORK=none' \
+    'API_KEY_ENV=TEST_KEY' 'API_BASE=https://x.invalid' 'MODEL=m' \
+    'GIT_NAME=n' 'GIT_EMAIL=e@localhost'
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile default --network none --yes
+  case "$(receipt_body)" in
+    *"run with --network"*) _fail "no override was in force" "$(receipt_body)" ;;
+    *) ;;
+  esac
 }
 
 # Accumulation on one account is the residual the tool cannot remove. Counting
@@ -66,7 +91,7 @@ test_each_compartment_counts_separately() {
   stub_calypsocode_agent
   TEST_KEY=k launch
   TEST_KEY=k launch
-  TEST_KEY=k CALYPSO_NETWORK=none run_calypso --profile other --yes
+  TEST_KEY=k run_calypso --profile other --network none --yes
   case "$(receipt_body)" in
     *"session 1 in this compartment since"*) ;;
     *) _fail "a second compartment should start its own count" "$(receipt_body)" ;;
@@ -172,7 +197,7 @@ EOF
   # leads its own process group and we can signal that group — which is what
   # a terminal does on Ctrl-C, agent included.
   set -m
-  CALYPSO_NETWORK=none TEST_KEY=k "$CALYPSO_BIN" --profile default --yes > "$SANDBOX/out" 2>&1 &
+  TEST_KEY=k "$CALYPSO_BIN" --profile default --network none --yes > "$SANDBOX/out" 2>&1 &
   local pid=$!
   set +m
 
@@ -209,7 +234,7 @@ EOF
   chmod +x "$SANDBOX/bin/calypsocode-agent"
 
   set -m
-  CALYPSO_NETWORK=none TEST_KEY=k "$CALYPSO_BIN" --profile default --yes > "$SANDBOX/out" 2>&1 &
+  TEST_KEY=k "$CALYPSO_BIN" --profile default --network none --yes > "$SANDBOX/out" 2>&1 &
   local pid=$!
   set +m
 
@@ -238,7 +263,7 @@ test_terminated_session_does_not_report_success() { _direct_signal_test TERM 143
 test_no_partial_receipt_is_left_behind() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes
+  TEST_KEY=k run_calypso --profile default --network none --yes
   assert_status 0
   local leftovers
   leftovers="$(find "$CALYPSO_STATE_DIR" -name '*.partial' 2>/dev/null | wc -l)"

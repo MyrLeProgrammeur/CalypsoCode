@@ -26,6 +26,7 @@ jobs:
   # Fastest feedback first: a lint failure in seconds beats a test run.
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -47,25 +48,45 @@ jobs:
           ./shellcheck bin/calypsocode
           ./shellcheck -x test/run.sh test/helpers.sh test/mutate.sh test/*.test.sh
 
-      - name: Validate YAML in config/
+      # config/ holds only what the launcher tells people to copy. An obsolete
+      # example sitting beside a supported one reads as a second supported
+      # option, which is how the dead local-proxy template kept getting found.
+      # Archives live in docs/archive/ and are checked separately below.
+      - name: Check config/ carries only supported examples
         run: |
-          yamllint -d "{extends: default, rules: {line-length: disable, document-start: disable, comments-indentation: disable}}" config/*.yaml
-
-      - name: Validate JSON in config/
-        run: |
+          test -f config/profile.example.env
           shopt -s nullglob
-          files=(config/*.json config/*.json.example)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No JSON file found in config/"
+          stray=(config/*.json config/*.json.example config/*.yaml config/*.yml)
+          if [ ${#stray[@]} -gt 0 ]; then
+            echo "Unsupported example(s) in config/: ${stray[*]}" >&2
+            echo "Supported templates only. Archives belong in docs/archive/." >&2
             exit 1
           fi
-          for f in "${files[@]}"; do
+
+      # Archived examples are not runnable, but they are cited by findings, so
+      # they still have to parse — a quoted example nobody can read is worse
+      # than no example.
+      - name: Validate archived examples still parse
+        run: |
+          shopt -s nullglob
+          yaml=(docs/archive/*.yaml docs/archive/*.yml)
+          json=(docs/archive/*.json docs/archive/*.json.example)
+          if [ ${#yaml[@]} -eq 0 ] && [ ${#json[@]} -eq 0 ]; then
+            echo "No archived example found in docs/archive/"
+            exit 1
+          fi
+          for f in "${yaml[@]}"; do
+            echo "Checking $f"
+            yamllint -d "{extends: default, rules: {line-length: disable, document-start: disable, comments-indentation: disable}}" "$f"
+          done
+          for f in "${json[@]}"; do
             echo "Checking $f"
             python3 -m json.tool "$f" > /dev/null
           done
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -89,6 +110,7 @@ jobs:
   mutation-testing:
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -99,6 +121,7 @@ jobs:
   # no business leaking one into its own history.
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

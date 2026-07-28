@@ -85,7 +85,7 @@ test_duplicate_key_is_refused() {
 # is that same bug in miniature.
 test_profile_reports_the_effective_network_not_the_file() {
   write_profile
-  CALYPSO_NETWORK=none run_calypso profile
+  run_calypso profile --network none
   assert_status 0
   assert_contains "network:      none"
   assert_contains "overridden for this run"
@@ -103,15 +103,95 @@ test_profile_reports_the_file_when_there_is_no_override() {
 # `trim` strips whitespace at the edges only, so an interior tab reaches the generated
 # config and, unescaped, produces JSON the agent cannot parse — an opaque agent error
 # standing in for a profile typo.
-test_a_tab_inside_a_value_still_produces_valid_json() {
+# Control characters in profile values used to be escaped on the way into the
+# agent's config and passed through raw everywhere else — the same byte meaning
+# three different things depending on which consumer read it. They are refused
+# at the boundary now, so there is one rule instead of one per destination.
+# Refused *before* launch: a value the launcher will not accept must stop the
+# session, not reach the agent and fail later.
+test_a_tab_inside_a_value_is_refused_before_launch() {
   write_profile testbox \
     "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
     "API_BASE=https://x.invalid" "MODEL=mo	del" "GIT_NAME=n" "GIT_EMAIL=e@f"
   stub_calypsocode_agent
-  TEST_KEY=k run_calypso --profile testbox --yes
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "MODEL contains a tab (0x09)"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_an_escape_character_in_a_value_is_refused() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" \
+    "$(printf 'GIT_NAME=de\033[31mv')" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "GIT_NAME contains an escape (0x1B)"
+}
+
+test_a_carriage_return_inside_a_value_is_refused() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" \
+    "$(printf 'GIT_NAME=one\rtwo')" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "GIT_NAME contains a carriage return (0x0D)"
+}
+
+test_a_backspace_inside_a_value_is_refused() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" \
+    "$(printf 'GIT_NAME=ab\bc')" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "GIT_NAME contains a backspace (0x08)"
+}
+
+test_a_form_feed_inside_a_value_is_refused() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" \
+    "$(printf 'GIT_NAME=a\fb')" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "GIT_NAME contains a form feed (0x0C)"
+}
+
+test_a_delete_character_inside_a_value_is_refused() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=m" \
+    "$(printf 'GIT_NAME=a\177b')" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
+  assert_status 1
+  assert_contains "GIT_NAME contains a delete (0x7F)"
+}
+
+# The rule is "printable", not "ASCII". A compartment for someone whose name
+# has an accent, or is written in a non-Latin script, is a normal profile.
+test_printable_unicode_in_a_value_is_accepted_and_reaches_the_config() {
+  write_profile testbox \
+    "PROFILE=testbox" "NETWORK=none" "API_KEY_ENV=TEST_KEY" \
+    "API_BASE=https://x.invalid" "MODEL=modèle-日本語" \
+    "GIT_NAME=Zoé Ünicode" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile testbox --network none --yes
   assert_status 0
   local cfg="$CALYPSO_HOME/compartments/testbox/opencode.calypso.json"
-  python3 -m json.tool "$cfg" > /dev/null || _fail "a tab in a profile value broke the config"
+  python3 -m json.tool "$cfg" > /dev/null \
+    || _fail "unicode in a profile value broke the config" "$(cat "$cfg")"
+  case "$(cat "$cfg")" in
+    *"modèle-日本語"*) ;;
+    *) _fail "the model name should reach the config intact" "$(cat "$cfg")" ;;
+  esac
 }
 
 test_unsupported_network_is_refused() {

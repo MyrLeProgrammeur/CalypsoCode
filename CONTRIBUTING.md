@@ -102,9 +102,9 @@ Before pushing:
 shellcheck bin/calypsocode
 shellcheck -x test/run.sh test/helpers.sh test/*.test.sh
 
-# Config files are valid YAML/JSON
-yamllint config/*.yaml
-python3 -m json.tool config/agent.json.example > /dev/null
+# Archived examples still parse (config/ holds only profile.example.env)
+yamllint docs/archive/*.yaml
+python3 -m json.tool docs/archive/agent.json.example > /dev/null
 
 # No secrets, in the diff or anywhere in history
 gitleaks detect --source . --redact

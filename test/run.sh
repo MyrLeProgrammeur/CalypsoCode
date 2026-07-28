@@ -43,7 +43,9 @@ preflight() {
   fi
 
   local cmd
-  for cmd in curl mkfifo ip ss stat mkdir rm cat tr sed awk cut sort head grep timeout date; do
+  # pgrep: the per-test deadline in helpers.sh walks the process tree to reap a
+  # hung test's children, and a deadline that leaves them running is not one.
+  for cmd in curl mkfifo ip ss stat mkdir rm cat tr sed awk cut sort head grep timeout pgrep date; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       echo "test/run.sh: '$cmd' not found — required by the test harness or its stubs." >&2
       failed=1
@@ -69,6 +71,10 @@ EXPECTED_SUITES=(egress helpers launch leak picker profile receipt)
 filter="${1:-}"
 failed=0
 ran=0
+suite_status=0
+# Whole-suite ceiling. Well above the sum of every per-test deadline a healthy
+# suite could use, so this only fires for a wedge the inner bound cannot see.
+SUITE_TIMEOUT="${CALYPSO_TEST_SUITE_TIMEOUT:-300}"
 
 if [ -z "$filter" ]; then
   for expected in "${EXPECTED_SUITES[@]}"; do
@@ -86,7 +92,20 @@ for suite in test/*.test.sh; do
     case "$suite" in *"$filter"*) ;; *) continue ;; esac
   fi
   ran=$((ran + 1))
-  bash "$suite" || failed=$((failed + 1))
+  # Second bound, outside the per-test one in helpers.sh. That one needs the
+  # driver to still be running to enforce anything; this one covers a suite
+  # that wedges before or between tests, where nothing inside it is left to
+  # notice. `timeout` puts the child in its own process group and signals the
+  # group, so the suite's stubs go with it. SIGKILL follows if it ignores the
+  # first signal.
+  timeout -k 10s "$SUITE_TIMEOUT" bash "$suite"
+  suite_status=$?
+  if [ "$suite_status" = 124 ] || [ "$suite_status" = 137 ]; then
+    echo "test/run.sh: $suite produced no result after ${SUITE_TIMEOUT}s — killed." >&2
+    failed=$((failed + 1))
+  elif [ "$suite_status" != 0 ]; then
+    failed=$((failed + 1))
+  fi
 done
 
 echo

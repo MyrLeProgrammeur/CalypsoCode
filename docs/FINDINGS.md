@@ -96,7 +96,7 @@ default dev onion0 proto static
 Isolation is enforced by the kernel routing table, not by the env var. The
 variable is belt-and-braces; removing it for loopback is safe.
 
-**Known casualty.** The Tinfoil block in `config/litellm.config.example.yaml`
+**Known casualty.** The Tinfoil block in `docs/archive/litellm.config.example.yaml`
 points LiteLLM at `http://127.0.0.1:3301/v1`. That path is broken as written
 for exactly this reason.
 
@@ -378,6 +378,13 @@ CALYPSO_NETWORK=none ./bin/calypsocode --profile header-test --yes run "hi"
 
 `NETWORK=none` is the only way to run this test — it is not a statement about
 production config.
+
+> **Note, 2026-07-28.** The command above is left as it was run. `CALYPSO_NETWORK`
+> is no longer read by the launcher (issue #48): an inherited value could
+> downgrade a Tor compartment without appearing in the command, so the override
+> is now `--network none`, accepted from argv only. It was redundant here in any
+> case — the throwaway profile already sets `NETWORK=none`. Nothing measured
+> changes.
 
 **Result.** Two `POST /v1/chat/completions` requests reached the server (an
 automatic title-generation call, then the main turn), both carrying identical

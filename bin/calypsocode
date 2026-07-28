@@ -74,6 +74,14 @@ options:
                    from an existing profile. The key variable and the git
                    identity are always asked for again — sharing either would
                    make the two compartments one customer to the provider.
+  --network tor|none
+                   override the profile's NETWORK for this one run. `none`
+                   disables isolation entirely. Command line only, like
+                   --force-unsafe: a downgrade has to be visible in the command
+                   that performed it, and an environment variable is inherited
+                   by every later run in that shell without appearing in any of
+                   them. The receipt records both the configured and the
+                   effective backend.
   --no-verify      skip the egress check AND the leak test. Both cost a few
                    seconds; skipping them means the session runs with no
                    evidence that it is isolated, and the receipt says so.
@@ -89,8 +97,10 @@ commands:
   doctor           report what is and is not ready, without launching
 
 environment:
-  CALYPSO_NETWORK  override the profile's NETWORK for one run. `none` disables
-                   isolation entirely and is warned about on every launch.
+  CALYPSO_NETWORK  no longer read. It used to override the profile's NETWORK,
+                   which let an inherited value downgrade a Tor compartment
+                   without appearing in the command. Set it and calypsocode
+                   says so and refuses; use --network instead.
 
 One launch is one namespace. One compartment is one key, one config and one
 identity, persisting across launches. Nothing crosses between compartments.
@@ -106,6 +116,54 @@ trim() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
+}
+
+# Refuses C0 control characters and DEL in a profile value.
+#
+# Rejected at the boundary rather than escaped at each destination, because the
+# destinations disagree about what a control character means. The same byte is
+# a `\t` in the agent's JSON config, an invisible nudge in a terminal, and a
+# line the receipt renders verbatim — and an ESC among them repaints what the
+# reader sees, so a receipt could show a compartment it did not describe. One
+# rule here beats one rule per consumer, each of which has to stay correct
+# forever.
+#
+# Printable Unicode is untouched: a git identity with an accent or a name in a
+# non-Latin script is a normal profile, not an attack.
+reject_control_chars() {
+  local key="$1" value="$2" context="${3:-}" c hex rest name
+
+  case "$value" in
+    *[$'\001'-$'\037'$'\177']*) ;;
+    *) return 0 ;;
+  esac
+
+  # Name the offender. "invalid character" sends the reader hunting through a
+  # value whose problem is by definition invisible.
+  rest="$value"
+  while [ -n "$rest" ]; do
+    c="${rest:0:1}"
+    case "$c" in
+      [$'\001'-$'\037'$'\177']) break ;;
+    esac
+    rest="${rest:1}"
+  done
+  hex="$(printf '%02X' "'$c")"
+  case "$hex" in
+    09) name="a tab" ;;
+    0A) name="a newline" ;;
+    0D) name="a carriage return" ;;
+    08) name="a backspace" ;;
+    0C) name="a form feed" ;;
+    1B) name="an escape" ;;
+    7F) name="a delete" ;;
+    *) name="a control character" ;;
+  esac
+
+  die "${context}$key contains $name (0x$hex). Profile values must be printable:
+  they are written into the agent's config, printed to your terminal, and
+  copied into the session receipt, and a control character means something
+  different in each."
 }
 
 # Tor only protects traffic up to the exit relay — whatever happens after that
@@ -293,6 +351,17 @@ profile_create() {
   read -r git_email || true
   git_email="${git_email:-dev@localhost}"
 
+  # Checked here as well as in profile_load, not instead of it. A pasted answer
+  # can carry an ESC or a stray CR, and catching it only on the next launch
+  # means the wizard reports success and writes a file that will not load.
+  reject_control_chars "PROFILE" "$compartment" "answer: "
+  reject_control_chars "API_KEY_ENV" "$key_env" "answer: "
+  reject_control_chars "API_BASE" "$api_base" "answer: "
+  reject_control_chars "MODEL" "$model" "answer: "
+  reject_control_chars "MODELS" "$models" "answer: "
+  reject_control_chars "GIT_NAME" "$git_name" "answer: "
+  reject_control_chars "GIT_EMAIL" "$git_email" "answer: "
+
   mkdir -p "$PROFILE_DIR"
   {
     echo "# Written by \`calypsocode --new-profile $name\` on $(date -u +%Y-%m-%d). Edit freely."
@@ -380,6 +449,7 @@ profile_load() {
     if ! profile_key_known "$key"; then
       die "$PROFILE_FILE:$lineno: unknown key '$key' (accepted: ${PROFILE_KEYS[*]})"
     fi
+    reject_control_chars "$key" "$value" "$PROFILE_FILE:$lineno: "
     # Same reason unknown keys are refused: a duplicate resolves silently to the
     # last one, and a second NETWORK= line would drop a compartment boundary
     # without a word.
@@ -457,7 +527,7 @@ profile_show() {
   # the profile's own setting is a backend choice hiding in a second place, which is
   # exactly what the picker refuses to allow.
   if [ "${NETWORK:-$P_NETWORK}" != "$P_NETWORK" ]; then
-    echo "network:      ${NETWORK:-$P_NETWORK} — overridden for this run by \$CALYPSO_NETWORK"
+    echo "network:      ${NETWORK:-$P_NETWORK} — overridden for this run by --network"
     echo "              (the profile says $P_NETWORK)"
   else
     echo "network:      $P_NETWORK"
@@ -500,9 +570,31 @@ json_escape() {
   # Interior tabs and newlines survive `trim`, which only strips the edges, and an
   # unescaped one produces a config the agent cannot parse — surfacing as an opaque
   # agent error rather than as the profile typo it is.
+  #
+  # reject_control_chars() now refuses all of these upstream, so nothing here
+  # should ever fire. Kept complete anyway: this function is what makes the
+  # generated JSON valid, and leaving it depending on a guard somewhere else
+  # means the next caller that skips that guard emits a broken config.
   s="${s//$'\t'/\\t}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\r'/\\r}"
+  s="${s//$'\b'/\\b}"
+  s="${s//$'\f'/\\f}"
+  # The C0 characters with no short form, plus DEL. \u escapes are the only
+  # legal spelling for them in JSON.
+  local c hex out=""
+  while [ -n "$s" ]; do
+    c="${s:0:1}"
+    s="${s:1}"
+    case "$c" in
+      [$'\001'-$'\037'$'\177'])
+        hex="$(printf '%04x' "'$c")"
+        out+="\\u$hex"
+        ;;
+      *) out+="$c" ;;
+    esac
+  done
+  s="$out"
   printf '%s' "$s"
 }
 
@@ -722,6 +814,11 @@ startup_check() {
   else
     echo "  network        none — no isolation, your real IP reaches the provider"
   fi
+  # Printed above the --yes early return, so skipping the confirmation still
+  # shows that this run is not the compartment's configured backend.
+  if [ "$NETWORK" != "$P_NETWORK" ]; then
+    echo "                 --network $NETWORK applies to this run only; the profile says $P_NETWORK"
+  fi
   if path_leaks_username; then
     echo "  project path   $PWD"
     echo "                 contains your OS username '$user' — the agent will read and send it"
@@ -795,6 +892,12 @@ receipt_write() {
       echo "network:      tor, but the egress check did not complete — unverified"
     else
       echo "network:      tor, egress NOT verified (--no-verify)"
+    fi
+    # Both values, never just the effective one. A receipt saying "network: none"
+    # for a compartment configured as tor reads like the compartment was always
+    # that way; the point is that this run departed from it, on purpose, here.
+    if [ "$NETWORK" != "$P_NETWORK" ]; then
+      echo "              configured $P_NETWORK, run with --network $NETWORK"
     fi
     case "$leak" in
       passed*)
@@ -969,6 +1072,10 @@ ASSUME_YES=0
 # CALYPSO_FORCE_UNSAFE already in the environment is overwritten rather than
 # obeyed — the flag cannot become a silent default.
 FORCE_UNSAFE=0
+# Empty means "the profile decides". Read from argv and nowhere else, for the
+# same reason as FORCE_UNSAFE: a backend downgrade must be in the command that
+# performed it, not inherited from a shell that set it once, hours ago.
+NETWORK_OVERRIDE=""
 AGENT_ARGS=()
 
 case "${1:-}" in
@@ -1011,6 +1118,15 @@ while [ $# -gt 0 ]; do
       ;;
     --from=*)
       FROM_PROFILE="${1#--from=}"
+      shift
+      ;;
+    --network)
+      [ $# -ge 2 ] || die "--network needs a backend: tor or none"
+      NETWORK_OVERRIDE="$2"
+      shift 2
+      ;;
+    --network=*)
+      NETWORK_OVERRIDE="${1#--network=}"
       shift
       ;;
     --no-verify)
@@ -1058,6 +1174,8 @@ if [ -n "$NEW_PROFILE" ]; then
   [ "$PROFILE_EXPLICIT" = 0 ] \
     || die "--new-profile names a profile to write and --profile one to launch. Pass one of them."
   [ "$ASSUME_YES" = 0 ] || die "--new-profile has questions to ask, and --yes cannot answer them."
+  [ -z "$NETWORK_OVERRIDE" ] \
+    || die "--network overrides a launch, and --new-profile does not launch. The profile's own NETWORK is asked for."
   profile_create "$NEW_PROFILE" "$FROM_PROFILE"
   exit 0
 fi
@@ -1066,14 +1184,25 @@ fi
 
 profile_load "$PROFILE_NAME"
 
+# An inherited CALYPSO_NETWORK used to win over the profile. Refused rather than
+# ignored: a value someone exported to debug one run would otherwise keep
+# downgrading every Tor compartment launched from that shell, silently, with
+# nothing in the command to show for it. Saying so is the only way the person
+# who set it finds out.
+if [ -n "${CALYPSO_NETWORK:-}" ]; then
+  die "CALYPSO_NETWORK is set in this environment and is no longer read — an inherited
+             value must not decide the network backend. Pass --network ${CALYPSO_NETWORK} to
+             mean it for this run, or unset CALYPSO_NETWORK."
+fi
+
 # Resolved before the subcommand dispatch, not after: `profile` and `doctor` report on
 # the compartment, and reporting the file's value while an override is in force would
 # put a backend choice in a second place — the thing the picker's design exists to
 # prevent.
-NETWORK="${CALYPSO_NETWORK:-$P_NETWORK}"
+NETWORK="${NETWORK_OVERRIDE:-$P_NETWORK}"
 case "$NETWORK" in
   tor | none) ;;
-  *) die "CALYPSO_NETWORK='$NETWORK' — accepted values: tor, none" ;;
+  *) die "--network '$NETWORK' — accepted values: tor, none" ;;
 esac
 
 case "$COMMAND" in

@@ -106,4 +106,59 @@ test_a_polluted_environment_produces_the_same_result_as_a_clean_one() {
   assert_equals "$polluted" "$clean"
 }
 
+# --- the per-test deadline -------------------------------------------------
+# A hang used to hold the whole job until the platform's default expired, with
+# no output naming the test that stopped. These assert the bound exists and
+# that a test which trips it is reported, not swallowed.
+
+test_a_hanging_test_is_killed_and_reported_as_failed() {
+  local out status
+  out="$(_run_harness_scenario '
+    TEST_TIMEOUT=1
+    test_hangs() { sleep 300; }
+  ')"
+  status=$?
+  assert_equals "$status" "1"
+  case "$out" in
+    *"no result after 1s"*) ;;
+    *) _fail "the timeout should name itself in the output" "$out" ;;
+  esac
+  # Reported as failed, not skipped: a test that never finished proved nothing.
+  case "$out" in
+    *"0/1 passed, 1 FAILED"*) ;;
+    *) _fail "a timed-out test should count as a failure" "$out" ;;
+  esac
+}
+
+test_a_hanging_test_does_not_leave_its_children_behind() {
+  local pidfile out child
+  pidfile="$SANDBOX/hung-child.pid"
+  out="$(_run_harness_scenario "
+    TEST_TIMEOUT=1
+    test_hangs() { sleep 300 & echo \$! > '$pidfile'; wait; }
+  ")"
+  # The launcher spawns stubs which spawn their own children; killing only the
+  # test's own shell leaves those holding the sandbox open.
+  child="$(cat "$pidfile" 2>/dev/null || true)"
+  [ -n "$child" ] || { _fail "the scenario never recorded a child pid" "$out"; return; }
+  if kill -0 "$child" 2>/dev/null; then
+    kill -9 "$child" 2>/dev/null || true
+    _fail "the hung test's child $child survived the timeout" "$out"
+  fi
+}
+
+test_a_test_finishing_inside_the_deadline_is_unaffected() {
+  local out status
+  out="$(_run_harness_scenario '
+    TEST_TIMEOUT=30
+    test_quick() { assert_equals 1 1; }
+  ')"
+  status=$?
+  assert_equals "$status" "0"
+  case "$out" in
+    *"1/1 passed"*) ;;
+    *) _fail "a fast test should be untouched by the deadline" "$out" ;;
+  esac
+}
+
 run_tests

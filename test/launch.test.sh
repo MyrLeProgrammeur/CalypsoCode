@@ -2,14 +2,14 @@
 # Launch path: identity environment, compartment isolation, and refusing to
 # start when the compartment is not complete.
 #
-# These run with CALYPSO_NETWORK=none so they need neither Tor nor the network.
+# These run with --network none so they need neither Tor nor the network.
 # What `none` skips is egress verification, which test/egress.test.sh covers — and
 # did not, for as long as this comment claimed it while the file did not exist.
 # shellcheck source=test/helpers.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helpers.sh"
 
 launch() {
-  CALYPSO_NETWORK=none run_calypso --profile default --yes "$@"
+  run_calypso --profile default --network none --yes "$@"
 }
 
 test_missing_key_refuses_to_launch() {
@@ -413,7 +413,7 @@ test_startup_check_reports_what_will_be_used() {
 test_no_tty_without_yes_refuses() {
   write_profile
   stub_calypsocode_agent
-  OUTPUT="$(CALYPSO_NETWORK=none TEST_KEY=k "$CALYPSO_BIN" --profile default < /dev/null 2>&1)"
+  OUTPUT="$(TEST_KEY=k "$CALYPSO_BIN" --profile default --network none < /dev/null 2>&1)"
   STATUS=$?
   assert_status 1
   assert_contains "not a terminal"
@@ -423,9 +423,75 @@ test_no_tty_without_yes_refuses() {
 test_invalid_network_override_is_refused() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=carrier-pigeon TEST_KEY=k run_calypso --profile default --yes
+  TEST_KEY=k run_calypso --profile default --network carrier-pigeon --yes
   assert_status 1
   assert_contains "accepted values: tor, none"
+}
+
+# The override used to be an environment variable. A value exported once, to
+# debug one run, then kept downgrading every Tor compartment launched from that
+# shell — with nothing in any of those commands to show for it. Refused now,
+# rather than ignored: the person who set it has to be told, or they keep
+# believing the runs were isolated.
+test_an_inherited_network_variable_cannot_change_the_backend() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes
+  assert_status 1
+  assert_contains "CALYPSO_NETWORK is set in this environment and is no longer read"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_an_inherited_network_variable_matching_the_profile_is_still_refused() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=tor TEST_KEY=k run_calypso --profile default --yes
+  assert_status 1
+  assert_contains "no longer read"
+}
+
+test_network_option_needs_a_backend() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile default --network
+  assert_status 1
+  assert_contains "--network needs a backend"
+}
+
+test_network_option_accepts_an_equals_form() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile default --network=none --yes
+  assert_status 0
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+# --yes removes the confirmation prompt, not the disclosure. A run that departs
+# from the compartment's configured backend has to say so on the way past.
+test_yes_does_not_hide_a_network_override() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile default --network none --yes
+  assert_status 0
+  assert_contains "no isolation, your real IP reaches the provider"
+  assert_contains "--network none applies to this run only; the profile says tor"
+}
+
+test_network_matching_the_profile_reports_no_override() {
+  write_profile default 'NETWORK=none' \
+    'API_KEY_ENV=TEST_KEY' 'API_BASE=https://x.invalid' 'MODEL=m' \
+    'GIT_NAME=n' 'GIT_EMAIL=e@localhost'
+  stub_calypsocode_agent
+  TEST_KEY=k run_calypso --profile default --network none --yes
+  assert_status 0
+  assert_not_contains "applies to this run only"
+}
+
+test_network_override_does_not_combine_with_new_profile() {
+  write_profile
+  run_calypso --new-profile fresh --network none
+  assert_status 1
+  assert_contains "--new-profile does not launch"
 }
 
 test_help_and_doctor_do_not_launch() {
@@ -474,7 +540,7 @@ test_compartment_and_config_are_private_under_a_permissive_parent_umask() {
 test_typo_in_profile_option_never_launches_default() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --proifle default --yes
+  TEST_KEY=k run_calypso --proifle default --yes
   assert_status 1
   assert_contains "unknown option '--proifle'"
   assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
@@ -483,7 +549,7 @@ test_typo_in_profile_option_never_launches_default() {
 test_typo_in_no_verify_option_never_launches() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes --no-verifyy
+  TEST_KEY=k run_calypso --profile default --network none --yes --no-verifyy
   assert_status 1
   assert_contains "unknown option '--no-verifyy'"
   assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
@@ -492,7 +558,7 @@ test_typo_in_no_verify_option_never_launches() {
 test_typo_in_force_unsafe_option_never_launches() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes --force-unsaf
+  TEST_KEY=k run_calypso --profile default --network none --yes --force-unsaf
   assert_status 1
   assert_contains "unknown option '--force-unsaf'"
   assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
@@ -501,7 +567,7 @@ test_typo_in_force_unsafe_option_never_launches() {
 test_typo_in_yes_option_never_launches() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yess
+  TEST_KEY=k run_calypso --profile default --network none --yess
   assert_status 1
   assert_contains "unknown option '--yess'"
   assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"

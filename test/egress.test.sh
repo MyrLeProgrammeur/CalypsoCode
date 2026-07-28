@@ -121,7 +121,7 @@ test_the_verified_exit_ip_reaches_the_receipt() {
 test_a_none_mode_receipt_never_claims_a_tor_exit() {
   write_profile
   stub_calypsocode_agent
-  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes
+  TEST_KEY=k run_calypso --profile default --network none --yes
   assert_status 0
   case "$(receipt_body)" in
     *"verified IsTor"*) _fail "a none-mode receipt claims an egress check ran" "$(receipt_body)" ;;

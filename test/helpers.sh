@@ -19,6 +19,13 @@ CURRENT_TEST_FAILED=0
 CURRENT_TEST_SKIPPED=0
 FAILURES=()
 
+# Upper bound on one test function, in seconds. A regression that hangs the
+# launcher or a stub used to hold the whole job until the platform's own
+# default expired — tens of minutes, with no output naming the test that
+# stopped. Generous on purpose: the slowest real test is well under a second,
+# so anything near this is a hang, not a slow machine.
+TEST_TIMEOUT="${CALYPSO_TEST_TIMEOUT:-60}"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CALYPSO_BIN="${CALYPSO_BIN:-$REPO_ROOT/bin/calypsocode}"
 ORIGINAL_PATH="$PATH"
@@ -447,8 +454,72 @@ receipt_body() {
 
 # --- driver ----------------------------------------------------------------
 
+# Kills a process and everything below it, deepest first. The launcher spawns
+# stubs which spawn their own children; killing only the test's own shell
+# leaves those running, holding the sandbox directory open and, in CI, the
+# runner alive. Deepest-first so a parent cannot respawn a child being reaped.
+_kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    _kill_tree "$child"
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+# Runs one test function under a deadline and reports back which bucket it
+# landed in. The body runs in a subshell so a hang can be killed without
+# taking the driver with it; the three pieces of per-test state that live in
+# this shell come back through a file, since a subshell cannot write to its
+# parent's variables.
+#
+# Returns: 0 completed (status file holds the outcome), 1 timed out.
+_run_one_test() {
+  local fn="$1" status_file="$2" pid waited=0
+  # Losing these three in the subshell is the point, not an accident: they are
+  # this test's own tallies, and the file below is how they get back. The
+  # linter's warning about a modification not surviving the subshell describes
+  # the mechanism being relied on.
+  # `set -m` matters and is not decoration. Bash sets SIGINT and SIGQUIT to
+  # IGNORE in a job backgrounded by a non-interactive shell, and that
+  # disposition is inherited by everything the job spawns — including the
+  # launcher the signal tests exist to interrupt. Without monitor mode here,
+  # `kill -INT` on that launcher does nothing, and the receipt-on-Ctrl-C tests
+  # pass or fail for a reason that has nothing to do with the launcher's traps.
+  # Monitor mode also puts the subshell in its own process group, which is what
+  # makes it killable as a unit below.
+  set -m
+  # shellcheck disable=SC2030
+  (
+    CURRENT_TEST_FAILED=0
+    CURRENT_TEST_SKIPPED=0
+    ASSERTIONS_FAILED=0
+    "$fn" || true
+    printf '%s %s %s\n' \
+      "$CURRENT_TEST_FAILED" "$CURRENT_TEST_SKIPPED" "$ASSERTIONS_FAILED" \
+      > "$status_file"
+  ) &
+  pid=$!
+  set +m
+
+  # Polled rather than `timeout`, which would need the function exported to a
+  # fresh bash — along with every helper it calls and the whole sandbox
+  # environment. Tenth-of-a-second granularity costs nothing next to a
+  # process launch, and every test here completes in far less than one tick.
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge $((TEST_TIMEOUT * 10)) ]; then
+      _kill_tree "$pid"
+      wait "$pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+  return 0
+}
+
 run_tests() {
-  local suite fn
+  local suite fn _assertions
   suite="$(basename "${BASH_SOURCE[1]}" .test.sh)"
   echo "── $suite"
   for fn in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
@@ -457,7 +528,34 @@ run_tests() {
     CURRENT_TEST_SKIPPED=0
     TESTS_RUN=$((TESTS_RUN + 1))
     sandbox_setup
-    "$fn" || true
+
+    local status_file="$SANDBOX/.test-outcome" outcome=""
+    # ASSERTIONS_FAILED below is this shell's running total, deliberately
+    # re-read here after each test hands its own count back through the file.
+    # shellcheck disable=SC2031
+    if _run_one_test "$fn" "$status_file"; then
+      # Missing or empty means the subshell died before it could report —
+      # a crash, not a pass. Counted as a failure either way.
+      outcome="$(cat "$status_file" 2>/dev/null || true)"
+      if [ -z "$outcome" ]; then
+        echo "  FAIL  $fn"
+        echo "        the test process exited without reporting an outcome"
+        CURRENT_TEST_FAILED=1
+        ASSERTIONS_FAILED=$((ASSERTIONS_FAILED + 1))
+      else
+        read -r CURRENT_TEST_FAILED CURRENT_TEST_SKIPPED _assertions <<< "$outcome"
+        ASSERTIONS_FAILED=$((ASSERTIONS_FAILED + _assertions))
+      fi
+    else
+      # A timeout is a failure, never a skip: a test that never finished
+      # proved nothing, and reporting it as skipped would hide a hang behind
+      # a green run.
+      echo "  FAIL  $fn"
+      echo "        no result after ${TEST_TIMEOUT}s — killed, along with its children"
+      CURRENT_TEST_FAILED=1
+      ASSERTIONS_FAILED=$((ASSERTIONS_FAILED + 1))
+    fi
+
     sandbox_teardown
 
     # One bucket per test function, not per assertion — see _fail(). Skip
