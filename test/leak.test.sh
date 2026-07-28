@@ -22,6 +22,7 @@ test_passes_when_the_lan_is_unreachable() {
   # listening on every interface. The loopback-only listener is deliberately absent.
   assert_contains "3 target(s) that answer from the"
   assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
+  assert_oniux_invoked_once_with_inner_command
 }
 
 # The whole point of the test: a reachable private address means the namespace
@@ -53,6 +54,7 @@ test_force_unsafe_launches_anyway() {
   assert_contains "LEAK DETECTED"
   assert_contains "--force-unsafe given"
   assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
+  assert_oniux_invoked_once_with_inner_command
 }
 
 # Forcing past a leak must be visible afterwards, not only in the terminal
@@ -176,6 +178,77 @@ test_no_verify_receipt_says_the_test_did_not_run() {
     *"leak test NOT RUN"*) ;;
     *) _fail "the receipt should say the leak test did not run" "$(receipt_body)" ;;
   esac
+}
+
+# The leak probe's exit-code handling is an explicit allowlist (item 8): only
+# curl exit 7 (refused) counts as isolation-consistent; 0/52/56 are always a
+# leak; 28 is always inconclusive; and everything else — DNS failure,
+# malformed URL, or any curl exit code with no case of its own — must be
+# treated as inconclusive too, and refuse the launch, rather than being
+# lumped in with "refused" as a silent pass.
+_curl_with_exit_code_for_target() {
+  local target="$1" code="$2"
+  cat > "$SANDBOX/bin/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+for arg in "\$@"; do case "\$arg" in http://*|https://*) url="\$arg" ;; esac; done
+case "\$url" in *check.torproject.org*) echo '{"IsTor":true,"IP":"185.220.101.1"}'; exit 0 ;; esac
+[ -z "\${CALYPSO_LEAK_TARGETS:-}" ] && exit 0
+host="\${url#http://}"; host="\${host%%/*}"
+[ "\$host" = "$target" ] && exit $code
+exit 7
+EOF
+  chmod +x "$SANDBOX/bin/curl"
+}
+
+test_curl_exit_0_is_always_a_leak() {
+  write_profile
+  stub_namespace
+  _curl_with_exit_code_for_target 10.9.9.42:22000 0
+  launch
+  assert_status 1
+  assert_contains "LEAK DETECTED"
+}
+
+test_curl_exit_7_is_the_only_refused_outcome() {
+  write_profile
+  stub_namespace
+  _curl_with_exit_code_for_target 10.9.9.42:22000 7
+  launch
+  assert_status 0
+  assert_contains "leak test passed"
+}
+
+test_curl_exit_28_is_inconclusive() {
+  write_profile
+  stub_namespace
+  _curl_with_exit_code_for_target 10.9.9.42:22000 28
+  launch
+  assert_status 1
+  assert_contains "leak test inconclusive"
+}
+
+# An unrecognized curl exit code (DNS failure here — curl's own exit 6) must
+# not be silently read as "refused". Fails closed: inconclusive, refuse to launch.
+test_an_unrecognized_curl_exit_code_is_inconclusive_and_refuses_the_launch() {
+  write_profile
+  stub_namespace
+  _curl_with_exit_code_for_target 10.9.9.42:22000 6
+  launch
+  assert_status 1
+  assert_contains "leak test inconclusive"
+  assert_not_contains "leak test passed"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_another_unrecognized_curl_exit_code_is_also_inconclusive() {
+  write_profile
+  stub_namespace
+  _curl_with_exit_code_for_target 10.9.9.42:22000 3
+  launch
+  assert_status 1
+  assert_contains "leak test inconclusive"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 run_tests

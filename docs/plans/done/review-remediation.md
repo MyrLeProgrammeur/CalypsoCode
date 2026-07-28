@@ -564,7 +564,7 @@ about fork commit `dbffbc7`, **and** verifies Batch 1 landed.
 
 ### Batch 8 — The fork: revert the latent hunk, fix the licence claim
 
-Two small changes in `/home/matheo/dev/calypsocode-agent`, one commit each, one push.
+Two small changes in `<project-siblings>/calypsocode-agent`, one commit each, one push.
 
 - **Files:** `packages/opencode/src/provider/provider.ts`,
   `packages/core/src/plugin/provider/nvidia.ts`,
@@ -651,7 +651,7 @@ a weaker model.
   and the output reads like a type failure. Use `TURBO_CONCURRENCY=1 git push origin dev`
   — same check, serial, 30/30 green. Never `--no-verify`.
 - **Build the agent with the cwd inside the fork:**
-  `bun run --cwd /home/matheo/dev/calypsocode-agent/packages/opencode script/build.ts --single`.
+  `bun run --cwd <project-siblings>/calypsocode-agent/packages/opencode script/build.ts --single`.
   ESM imports are hoisted above the script's own `chdir`, so invoking it from elsewhere
   stamps the binary with the *other* repo's branch and version. The flag is `--single`.
 - **oniux gives the namespace a private `/tmp`** (F6, F7). A project directory under

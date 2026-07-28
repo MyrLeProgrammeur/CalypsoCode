@@ -145,11 +145,11 @@ test_file_without_trailing_newline_is_read_fully() {
 # shellcheck disable=SC2016  # the literal $() is exactly what is being asserted
 test_profile_is_not_executed_as_shell() {
   write_profile default \
-    "NETWORK=tor" "API_KEY_ENV=TEST_KEY" 'API_BASE=$(touch '"$SANDBOX"'/pwned)' \
+    "NETWORK=tor" "API_KEY_ENV=TEST_KEY" 'API_BASE=https://x.invalid/$(touch '"$SANDBOX"'/pwned)' \
     "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
   run_calypso profile
   assert_no_file "$SANDBOX/pwned"
-  assert_contains 'api_base:     $(touch'
+  assert_contains 'api_base:     https://x.invalid/$(touch'
 }
 
 test_key_presence_is_reported_without_printing_it() {
@@ -158,6 +158,161 @@ test_key_presence_is_reported_without_printing_it() {
   assert_status 0
   assert_contains "TEST_KEY is set"
   assert_not_contains "super-secret-value"
+}
+
+# API_KEY_ENV is used in bash indirect expansion, so an array-like value is not
+# merely a bad name — it can execute during the expansion itself.
+test_array_like_api_key_env_is_refused_without_side_effect() {
+  # shellcheck disable=SC2016 # the $(...) must reach the profile unexpanded —
+  # expanding it here would run the payload in the test instead of the launcher.
+  write_profile default \
+    'NETWORK=tor' 'API_KEY_ENV=a[$(touch '"$SANDBOX"'/pwned)]' \
+    'API_BASE=https://x.invalid' 'MODEL=m' 'GIT_NAME=n' 'GIT_EMAIL=e@f'
+  run_calypso profile
+  assert_status 1
+  assert_no_file "$SANDBOX/pwned"
+}
+
+test_valid_api_key_env_names_still_work() {
+  write_profile default \
+    'NETWORK=tor' 'API_KEY_ENV=MY_KEY_2' \
+    'API_BASE=https://x.invalid' 'MODEL=m' 'GIT_NAME=n' 'GIT_EMAIL=e@f'
+  run_calypso profile
+  assert_status 0
+  assert_contains 'MY_KEY_2 is NOT set'
+}
+
+test_api_key_env_starting_with_a_digit_is_refused() {
+  write_profile default \
+    'NETWORK=tor' 'API_KEY_ENV=9KEY' \
+    'API_BASE=https://x.invalid' 'MODEL=m' 'GIT_NAME=n' 'GIT_EMAIL=e@f'
+  run_calypso profile
+  assert_status 1
+  assert_contains "API_KEY_ENV='9KEY'"
+}
+
+# API_BASE validation: Tor only protects traffic up to the exit relay, so a
+# remote http:// endpoint hands the key and every prompt to whoever is
+# downstream in the clear. https:// is required for anything remote;
+# 127.0.0.1/localhost are the one accepted local exception.
+_write_api_base_profile() {
+  write_profile default \
+    "NETWORK=tor" "API_KEY_ENV=TEST_KEY" "API_BASE=$1" \
+    "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+}
+
+test_https_api_base_is_accepted() {
+  _write_api_base_profile "https://api.example.invalid/v1"
+  run_calypso profile
+  assert_status 0
+}
+
+test_remote_http_api_base_is_rejected() {
+  _write_api_base_profile "http://api.example.invalid/v1"
+  run_calypso profile
+  assert_status 1
+  assert_contains "only accepted for 127.0.0.1 or localhost"
+}
+
+test_loopback_http_api_base_is_accepted() {
+  _write_api_base_profile "http://127.0.0.1:8080/v1"
+  run_calypso profile
+  assert_status 0
+}
+
+test_localhost_http_api_base_is_accepted() {
+  _write_api_base_profile "http://localhost:8080/v1"
+  run_calypso profile
+  assert_status 0
+}
+
+test_unsupported_scheme_api_base_is_rejected() {
+  _write_api_base_profile "ftp://api.example.invalid/v1"
+  run_calypso profile
+  assert_status 1
+  assert_contains "unsupported scheme 'ftp://'"
+}
+
+test_malformed_api_base_without_scheme_is_rejected() {
+  _write_api_base_profile "api.example.invalid/v1"
+  run_calypso profile
+  assert_status 1
+  assert_contains "explicit scheme"
+}
+
+test_api_base_with_userinfo_is_rejected() {
+  _write_api_base_profile "https://user:pass@api.example.invalid/v1"
+  run_calypso profile
+  assert_status 1
+  assert_contains "embedded credentials"
+}
+
+test_api_base_with_fragment_is_rejected() {
+  _write_api_base_profile "https://api.example.invalid/v1#frag"
+  run_calypso profile
+  assert_status 1
+  assert_contains "fragment"
+}
+
+test_api_base_with_empty_host_is_rejected() {
+  _write_api_base_profile "https:///v1"
+  run_calypso profile
+  assert_status 1
+  assert_contains "missing host"
+}
+
+# profile_load() builds a path directly from the --profile name, same as
+# profile_create() does when writing one. A name that climbs out of
+# PROFILE_DIR must never be opened, whichever direction it is used in.
+test_profile_load_rejects_path_traversal() {
+  mkdir -p "$SANDBOX/outside"
+  cat > "$SANDBOX/outside/passwd.env" <<'EOF'
+NETWORK=tor
+API_KEY_ENV=TEST_KEY
+API_BASE=https://x.invalid
+MODEL=m
+GIT_NAME=n
+GIT_EMAIL=e@f
+EOF
+  run_calypso profile --profile "../outside/passwd"
+  assert_status 1
+  assert_contains "letters, digits, dot, dash and underscore only"
+  assert_not_contains "profile:      testbox"
+}
+
+test_profile_load_rejects_absolute_path() {
+  run_calypso profile --profile "/etc/passwd"
+  assert_status 1
+  assert_contains "letters, digits, dot, dash and underscore only"
+}
+
+test_profile_load_rejects_nested_path() {
+  run_calypso profile --profile "a/b"
+  assert_status 1
+  assert_contains "letters, digits, dot, dash and underscore only"
+}
+
+test_profile_load_rejects_hidden_name() {
+  run_calypso profile --profile ".hidden"
+  assert_status 1
+  assert_contains "letters, digits, dot, dash and underscore only"
+}
+
+test_profile_load_accepts_valid_punctuation() {
+  write_profile "a.b-c_d" \
+    "NETWORK=tor" "API_KEY_ENV=TEST_KEY" "API_BASE=https://x.invalid" \
+    "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  run_calypso profile --profile "a.b-c_d"
+  assert_status 0
+}
+
+# --from goes through profile_load() too — same guard applies to the name it
+# copies from.
+test_from_rejects_path_traversal() {
+  have_pty || { skip "script (pty) not installed"; return 0; }
+  run_calypso_tty "" --new-profile x --from "../outside/passwd"
+  assert_status 1
+  assert_contains "letters, digits, dot, dash and underscore only"
 }
 
 run_tests

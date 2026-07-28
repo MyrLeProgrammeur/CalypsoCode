@@ -25,7 +25,7 @@ Three things are wrong today and this plan fixes all three:
    reviews flagged this. The repo is public.
 3. **Nobody can install it.** There is no `calypsocode` on `PATH` (you must run
    `./bin/calypsocode` from the repo), no Install section in the README, and
-   the agent is a `bun run` shim with `/home/matheo/dev/calypsocode-agent`
+   the agent is a `bun run` shim with `<project-siblings>/calypsocode-agent`
    hardcoded in it.
 
 **In scope:** the `CalypsoCode` repo, plus two narrowly-scoped touches on the
@@ -94,7 +94,7 @@ independent of each other; 6 depends on 5.
   `docs/plans/calypsocode-ui-rebrand.md` (both untracked). Plus the
   `calypsocode-agent` fork, push only.
 - **Actions:**
-  - In the fork (`/home/matheo/dev/calypsocode-agent`, branch `dev`, 6 commits
+  - In the fork (`<project-siblings>/calypsocode-agent`, branch `dev`, 6 commits
     ahead of `origin/dev`): `git push origin dev`. Do this **first** — it is
     the single highest-value action in this plan and depends on nothing.
   - In this repo, on the existing `feat/calypsocode-ui-rebrand` branch, commit

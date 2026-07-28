@@ -1,0 +1,30 @@
+# Hash-pinned Python tools for the lint job, installed with
+# `pip install --require-hashes -r ci-requirements.txt`.
+#
+# Hashes are the sha256 digests PyPI publishes for each release's
+# artifacts (https://pypi.org/pypi/<project>/<version>/json). Wheels for
+# CPython 3.9-3.13 on manylinux x86_64 are listed, plus the sdist as a
+# fallback, to tolerate the Python version shipped by ubuntu-latest
+# changing without notice.
+#
+# To bump a version: fetch
+# https://pypi.org/pypi/<project>/<new-version>/json and replace the
+# pins below with the new artifacts' digests.sha256 values.
+
+yamllint==1.38.0 \
+    --hash=sha256:fc394a5b3be980a4062607b8fdddc0843f4fa394152b6da21722f5d59013c220 \
+    --hash=sha256:09e5f29531daab93366bb061e76019d5e91691ef0a40328f04c927387d1d364d
+
+# yamllint dependency
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189 \
+    --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a
+
+# yamllint dependency
+pyyaml==6.0.3 \
+    --hash=sha256:9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b \
+    --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
+    --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

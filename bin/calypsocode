@@ -8,6 +8,13 @@
 # Design: docs/DESIGN.md · Verified stack behaviour: docs/FINDINGS.md
 set -euo pipefail
 
+# Private by default. Every directory and file this script creates from here
+# on — compartments, generated agent config, state, receipts — inherits this,
+# regardless of the umask of the shell that invoked it. Set once, here, rather
+# than only inside profile_create(), so nothing created later can fall back to
+# the parent's umask by omission.
+umask 077
+
 # Resolved before anything is exported: XDG_CONFIG_HOME is rewritten later to
 # point the agent at the compartment, and these paths must not follow it.
 CALYPSO_HOME="${CALYPSO_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/calypsocode}"
@@ -45,11 +52,16 @@ usage() {
 calypsocode — run a coding agent under a compartment identity.
 
 usage:
-  calypsocode [--profile NAME] [agent args...]
+  calypsocode [--profile NAME] [options] [-- agent args...]
   calypsocode --new-profile NAME [--from NAME]
   calypsocode profile [--profile NAME]
   calypsocode doctor
   calypsocode --help
+
+`--` is mandatory before any argument meant for the agent rather than for
+calypsocode itself. An option calypsocode does not recognize is refused,
+never silently forwarded: `calypsocode --proifle x -- run` is a typo in an
+option calypsocode owns, not an agent argument, and is reported as one.
 
 options:
   --profile NAME   compartment to launch (default: default). Resolved to
@@ -94,6 +106,49 @@ trim() {
   s="${s#"${s%%[![:space:]]*}"}"
   s="${s%"${s##*[![:space:]]}"}"
   printf '%s' "$s"
+}
+
+# Tor only protects traffic up to the exit relay — whatever happens after that
+# is a property of the URL itself. A remote http:// endpoint hands the API key
+# and every prompt to anyone downstream of the exit in the clear, which is
+# worse than not using Tor at all, since it is invisible in the terminal.
+# 127.0.0.1/localhost are the one narrow exception, for a provider running on
+# the same machine, where there is no network segment to leak onto.
+validate_api_base() {
+  local url="$1" context="$2" scheme rest hostport host
+
+  case "$url" in
+    *'#'*) die "${context}API_BASE='$url' — a fragment ('#') is not accepted." ;;
+  esac
+
+  if [[ "$url" =~ ^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$ ]]; then
+    scheme="${BASH_REMATCH[1]}"
+    rest="${BASH_REMATCH[2]}"
+  else
+    die "${context}API_BASE='$url' — must be a URL with an explicit scheme, e.g. https://api.example.com."
+  fi
+
+  case "$rest" in
+    *@*) die "${context}API_BASE='$url' — embedded credentials ('user:pass@host') are not accepted; put the key in the profile's API_KEY_ENV instead." ;;
+  esac
+
+  hostport="${rest%%/*}"
+  host="${hostport%%:*}"
+  [ -n "$host" ] || die "${context}API_BASE='$url' — missing host."
+
+  case "$scheme" in
+    https) ;;
+    http)
+      case "$host" in
+        127.0.0.1 | localhost) ;;
+        *) die "${context}API_BASE='$url' — plain http:// is only accepted for 127.0.0.1 or localhost.
+  Tor only protects traffic up to the exit relay; a remote http:// endpoint sends
+  the API key and every prompt in the clear from there on. Use https://." ;;
+      esac
+      ;;
+    *) die "${context}API_BASE='$url' — unsupported scheme '$scheme://'. Only https:// is
+  accepted for a remote provider (http:// is allowed for 127.0.0.1 or localhost only)." ;;
+  esac
 }
 
 profile_key_known() {
@@ -214,6 +269,7 @@ profile_create() {
     printf 'API base URL (OpenAI-compatible): '
     read -r api_base || true
     [ -n "$api_base" ] || die "an API base URL is required."
+    validate_api_base "$api_base" ""
     printf 'Model: '
     read -r model || true
     [ -n "$model" ] || die "a model is required."
@@ -238,7 +294,6 @@ profile_create() {
   git_email="${git_email:-dev@localhost}"
 
   mkdir -p "$PROFILE_DIR"
-  umask 077
   {
     echo "# Written by \`calypsocode --new-profile $name\` on $(date -u +%Y-%m-%d). Edit freely."
     echo "PROFILE=$compartment"
@@ -279,6 +334,17 @@ profile_list() {
 # code.
 profile_load() {
   local name="$1"
+
+  # The name becomes a path, built directly from it below. The same guard
+  # profile_create() applies to a name it is about to write applies equally
+  # here to a name it is about to read: '../../etc/passwd' would resolve
+  # outside PROFILE_DIR just as readily reading as writing.
+  case "$name" in
+    '' | *[!A-Za-z0-9._-]* | .* | -*)
+      die "profile name '$name' — letters, digits, dot, dash and underscore only, and not starting with '.' or '-'."
+      ;;
+  esac
+
   PROFILE_FILE="$PROFILE_DIR/$name.env"
 
   # A missing profile is an error and never an invitation. Creating one from
@@ -351,6 +417,21 @@ profile_load() {
     tor | none) ;;
     *) die "$PROFILE_FILE: NETWORK='$P_NETWORK' — v1 accepts 'tor' or 'none'" ;;
   esac
+
+  # API_KEY_ENV is used in bash indirect expansion (${!P_API_KEY_ENV}) to read the
+  # key, so it must be a plain shell identifier. Anything else — an array-style
+  # subscript in particular — is not just rejected as a typo, it can execute
+  # during the expansion itself (e.g. `a[$(cmd)]`), so this is validated before
+  # any indirect expansion of it happens anywhere in the script.
+  case "$P_API_KEY_ENV" in
+    [A-Za-z_]*) ;;
+    *) die "$PROFILE_FILE: API_KEY_ENV='$P_API_KEY_ENV' — must be a plain variable name (letters, digits, underscore, not starting with a digit)." ;;
+  esac
+  case "$P_API_KEY_ENV" in
+    *[!A-Za-z0-9_]*) die "$PROFILE_FILE: API_KEY_ENV='$P_API_KEY_ENV' — must be a plain variable name (letters, digits, underscore, not starting with a digit)." ;;
+  esac
+
+  validate_api_base "$P_API_BASE" "$PROFILE_FILE: "
 }
 
 # Printed wherever the key is missing. The launcher never sees the provider's
@@ -479,8 +560,20 @@ SESSION_STARTED=0
 SESSION_START_EPOCH=0
 SESSION_START_STAMP=""
 EGRESS_FILE=""
-STARTED_FILE=""
 LEAK_FILE=""
+CHECKS_DONE_FIFO=""
+PROCEED_FIFO=""
+# Whether the agent was actually about to be exec'd, set by the parent itself
+# in launch_and_capture() upon the "ok" handshake from inside the namespace —
+# never inferred from a marker file the agent's own process could touch.
+AGENT_LAUNCHED=0
+# Captured by the parent, once, from the evidence files, during the handshake
+# in launch_and_capture() — strictly before the agent can run. The receipt is
+# built from these in-memory values and never by re-reading a file after the
+# agent has had a chance to run, because the agent shares the same UID and the
+# same filesystem and could otherwise rewrite its own verified evidence.
+VERIFIED_EXIT_IP=""
+VERIFIED_LEAK=""
 RECEIPT_DONE=0
 
 os_username() { id -un; }
@@ -500,7 +593,15 @@ os_username() { id -un; }
 # One TCP probe, three outcomes, because the verdict depends on telling them apart:
 #   0 — the handshake completed. Whatever came back, the packet arrived.
 #   1 — refused. This is the only outcome that proves isolation.
-#   2 — timed out. Proves nothing either way, and must not be read as a pass.
+#   2 — timed out, or curl failed for any other reason. Proves nothing either
+#       way, and must not be read as a pass.
+#
+# The case below is an explicit allowlist, not a catch-all default: only curl
+# exit 7 (could not connect — refused, or no route) counts as the isolation
+# pass. Every other outcome, including one that has never been seen and has no
+# case of its own, falls into the same `*)` as a real timeout — a DNS failure,
+# a malformed URL, a local I/O error, or a future curl exit code must never be
+# misread as a successful isolation result just because it wasn't 0.
 #
 # `curl` rather than bash's `/dev/tcp`: the test suite can stub a command and cannot
 # stub a builtin redirection, and a check that cannot be tested is how this one got
@@ -513,9 +614,10 @@ probe_tcp() {
     curl -s --noproxy '*' -o /dev/null --max-time "${2:-5}" "http://$1/"
   ) 2>/dev/null || rc=$?
   case "$rc" in
-    0 | 52 | 56) return 0 ;;
-    28) return 2 ;;
-    *) return 1 ;;
+    0 | 52 | 56) return 0 ;;  # leak: the handshake completed
+    7) return 1 ;;            # refused: the only outcome that proves isolation
+    28) return 2 ;;           # timeout: proves nothing
+    *) return 2 ;;            # anything else: fail closed, not a pass
   esac
 }
 
@@ -654,26 +756,17 @@ receipt_write() {
   if [ "$RECEIPT_DONE" = "1" ]; then return "$status"; fi
   RECEIPT_DONE=1
 
-  local end_epoch end_stamp elapsed exit_ip user receipt started=0 leak="" leak_body=""
+  local end_epoch end_stamp elapsed exit_ip user receipt leak="" leak_body=""
 
-  exit_ip=""
-  if [ -n "$EGRESS_FILE" ] && [ -f "$EGRESS_FILE" ]; then
-    read -r exit_ip < "$EGRESS_FILE" || true
-    rm -f "$EGRESS_FILE"
-  fi
-  if [ -n "$LEAK_FILE" ] && [ -f "$LEAK_FILE" ]; then
-    read -r leak < "$LEAK_FILE" || true
-    rm -f "$LEAK_FILE"
-  fi
-  if [ -n "$STARTED_FILE" ] && [ -f "$STARTED_FILE" ]; then
-    started=1
-    rm -f "$STARTED_FILE"
-  fi
+  # From the parent's own memory, captured in launch_and_capture() strictly
+  # before the agent could run — never by re-reading a file afterward, which
+  # the agent (same UID, same filesystem) could have rewritten in the meantime.
+  exit_ip="$VERIFIED_EXIT_IP"
+  leak="$VERIFIED_LEAK"
 
   # A refused launch is not a session. Saying what "was not removed" when
   # nothing was sent would be a receipt for something that never happened.
-  if [ "$started" != "1" ]; then
-    rm -f "$LEAK_FILE"
+  if [ "$AGENT_LAUNCHED" != "1" ]; then
     echo "calypsocode: the agent never started — nothing was sent, so no receipt." >&2
     return "$status"
   fi
@@ -822,6 +915,16 @@ doctor() {
   # Both the leak test and the egress check are curl. Its absence is otherwise
   # discovered after the user has already confirmed a launch.
   doctor_bin curl     "install it with your package manager" || failed=1
+  # leak_candidates() requires both: `ip` to find the gateway and this host's
+  # own addresses, `ss` to find what is listening on them. Checked only when
+  # there is a namespace to leak-test at all — same as the oniux check above —
+  # so their absence is reported here rather than surfacing later as an opaque
+  # "no target on the host answered", which reads as a network problem and is
+  # actually a missing tool.
+  if [ "$P_NETWORK" != "none" ]; then
+    doctor_bin ip "install iproute2 (Debian/Ubuntu/Fedora) or iproute2 (Arch) — the leak test uses it to find the gateway and this host's own addresses" || failed=1
+    doctor_bin ss "install iproute2 (Debian/Ubuntu/Fedora) or iproute2 (Arch) — the leak test uses it to find what is listening on them" || failed=1
+  fi
   doctor_bin calypsocode-agent "build it: github.com/MyrLeProgrammeur/calypsocode-agent" || failed=1
 
   if [ -f "$PROFILE_FILE" ]; then
@@ -932,8 +1035,13 @@ while [ $# -gt 0 ]; do
       break
       ;;
     *)
-      AGENT_ARGS+=("$1")
-      shift
+      # `--` is the mandatory boundary for agent arguments. Without it, a
+      # typo'd option (`--proifle` for `--profile`) used to fall through here
+      # and get forwarded to the agent silently — the launcher never noticed
+      # the typo, quietly loaded the default profile, and started a session
+      # under it. An unrecognized token before `--` is refused instead, before
+      # any profile is loaded or anything is launched.
+      die "unknown option '$1' — agent arguments must come after \`--\` (see --help)."
       ;;
   esac
 done
@@ -987,6 +1095,26 @@ if [ -z "$API_KEY_VALUE" ]; then
 $(key_help)"
 fi
 
+# oniux gives the namespace its own private /tmp (docs/FINDINGS.md F6/F7): a
+# project directory that resolves under the host's /tmp does not exist at all
+# inside it, and the agent fails with an opaque, unrelated-looking error only
+# once the namespace is already running. Caught here instead, resolved through
+# symlinks so a link pointing into /tmp is caught the same as a direct path —
+# neither exists inside the namespace either.
+if [ "$NETWORK" = "tor" ]; then
+  RESOLVED_PWD="$(cd -- "$PWD" 2>/dev/null && pwd -P)" || die "could not resolve the working directory."
+  case "$RESOLVED_PWD" in
+    /tmp | /tmp/*)
+      die "the working directory resolves to $RESOLVED_PWD, under /tmp.
+  oniux gives the namespace its own private /tmp — a directory under the
+  host's /tmp does not exist inside it, and the agent would fail with an
+  opaque error once the session is already running. Run calypsocode from a
+  directory outside /tmp instead: your home directory, or anywhere else on
+  disk (docs/FINDINGS.md F6/F7)."
+      ;;
+  esac
+fi
+
 compartment_prepare
 
 # Identity. Every line removes a signal at its source, before the agent starts.
@@ -1034,14 +1162,27 @@ startup_check
 
 # The exit IP is only knowable inside the namespace, and $HOME is the way back
 # out (F7). Not /tmp — that is private to the child (F6).
+#
+# CHECKS_DONE_FIFO and PROCEED_FIFO are the handshake that keeps this evidence
+# trustworthy: the inner script writes egress/leak evidence to plain files,
+# then blocks on the first FIFO until the parent has actually read that
+# evidence into its own shell variables, and only then blocks on the second
+# FIFO waiting for the parent's go-ahead before it ever execs the agent. The
+# agent process therefore never exists at any point where the evidence files
+# are unread, and — since the four paths below are unset from the inner
+# script's environment right before exec — the agent never even learns where
+# they are.
 mkdir -p "$STATE_DIR"
 EGRESS_FILE="$STATE_DIR/.egress-$$"
-STARTED_FILE="$STATE_DIR/.started-$$"
 LEAK_FILE="$STATE_DIR/.leak-$$"
-rm -f "$EGRESS_FILE" "$STARTED_FILE" "$LEAK_FILE"
+CHECKS_DONE_FIFO="$STATE_DIR/.checksdone-$$"
+PROCEED_FIFO="$STATE_DIR/.proceed-$$"
+rm -f "$EGRESS_FILE" "$LEAK_FILE" "$CHECKS_DONE_FIFO" "$PROCEED_FIFO"
+mkfifo -m 600 "$CHECKS_DONE_FIFO" "$PROCEED_FIFO"
 export CALYPSO_EGRESS_FILE="$EGRESS_FILE"
-export CALYPSO_STARTED_FILE="$STARTED_FILE"
 export CALYPSO_LEAK_FILE="$LEAK_FILE"
+export CALYPSO_CHECKS_DONE_FIFO="$CHECKS_DONE_FIFO"
+export CALYPSO_PROCEED_FIFO="$PROCEED_FIFO"
 # Checked here, on the host, and not only inside the namespace: the host-side
 # confirmation of leak targets needs curl too, and without it every candidate looks
 # unreachable. The user would be told "no target answered" — true, and the wrong
@@ -1070,10 +1211,31 @@ export CALYPSO_FORCE_UNSAFE="$FORCE_UNSAFE"
 INNER=$(cat <<'INNER_EOF'
 set -euo pipefail
 
+# The evidence handshake with the parent (see the comment above where the
+# FIFOs are created). Whatever happens below, this runs exactly once, on any
+# exit from this script — including every early `exit 1` in the checks that
+# follow — so the parent is never left waiting on CALYPSO_CHECKS_DONE_FIFO
+# for a session that already died. CALYPSO_CHECK_RESULT stays "failed" unless
+# the code right before `exec` below sets it to "ok" and signals explicitly,
+# which also marks it signaled so this trap becomes a no-op afterward.
+CALYPSO_CHECK_RESULT="failed"
+CALYPSO_CHECKS_SIGNALED=0
+calypso_notify_checks_done() {
+  [ "$CALYPSO_CHECKS_SIGNALED" = "1" ] && return 0
+  CALYPSO_CHECKS_SIGNALED=1
+  if [ -n "${CALYPSO_CHECKS_DONE_FIFO:-}" ]; then
+    printf '%s\n' "$CALYPSO_CHECK_RESULT" > "$CALYPSO_CHECKS_DONE_FIFO" 2>/dev/null || true
+  fi
+}
+trap calypso_notify_checks_done EXIT
+
 # Duplicated from the launcher on purpose: this runs in a fresh bash inside the
 # namespace, so it inherits no functions. Keep the two in step — the host uses it to
 # confirm a target answers, this side uses it to prove the same target does not.
-#   0 handshake completed · 1 refused · 2 timed out, which is not a pass.
+#   0 handshake completed (leak) · 1 refused (isolation-consistent) · 2 timed
+#   out or anything else curl reports, which is not a pass — an explicit
+#   allowlist, not a catch-all, so an unrecognized curl exit code fails closed
+#   rather than being misread as a refused connection.
 probe_tcp() {
   local rc=0
   (
@@ -1082,9 +1244,77 @@ probe_tcp() {
   ) 2>/dev/null || rc=$?
   case "$rc" in
     0 | 52 | 56) return 0 ;;
+    7) return 1 ;;
     28) return 2 ;;
-    *) return 1 ;;
+    *) return 2 ;;
   esac
+}
+
+# Structural validation of check.torproject.org's answer, in place of a
+# substring match on `"IsTor":true`: that match is satisfied by `"IsTor":"true"`,
+# by a decoy field placed anywhere in the body, and by whichever of two
+# duplicate IsTor fields happens to appear first — none of which is the
+# provable claim this check exists to make. Prints `NOTTOR` for a
+# well-formed, definite "no", or the validated exit IP for a definite "yes".
+# Any other outcome — malformed JSON, a duplicate/ambiguous field, IsTor not a
+# JSON boolean, an IP that does not parse as IPv4 or IPv6, an empty or
+# oversized body — is a parse failure (exit 1), which the retry loop treats
+# exactly like a dead circuit: not proof of anything, tried again.
+# The script text itself, kept apart from the body: python3 reads its program
+# from argv (-c) precisely so stdin stays free to carry the untrusted body,
+# which a `python3 - <<HEREDOC` form would otherwise consume as the program
+# text instead, leaving nothing for the pipe.
+CALYPSO_TOR_CHECK_PY='
+import ipaddress
+import json
+import sys
+
+
+def no_duplicate_keys(pairs):
+    seen = set()
+    obj = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate key: " + key)
+        seen.add(key)
+        obj[key] = value
+    return obj
+
+
+try:
+    body = sys.stdin.read()
+    data = json.loads(body, object_pairs_hook=no_duplicate_keys)
+except Exception:
+    sys.exit(1)
+
+is_tor = data.get("IsTor")
+ip = data.get("IP")
+
+if not isinstance(is_tor, bool):
+    sys.exit(1)
+
+if is_tor is False:
+    print("NOTTOR")
+    sys.exit(0)
+
+if not isinstance(ip, str):
+    sys.exit(1)
+try:
+    ipaddress.ip_address(ip)
+except ValueError:
+    sys.exit(1)
+
+print(ip)
+'
+
+parse_tor_response() {
+  local body="$1"
+  [ -n "$body" ] || return 1
+  # check.torproject.org's real answer is under 200 bytes; this is generous
+  # headroom, not a size the true endpoint would ever approach.
+  [ "${#body}" -le 4096 ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  printf '%s' "$body" | python3 -c "$CALYPSO_TOR_CHECK_PY" 2>/dev/null
 }
 
 if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
@@ -1184,24 +1414,27 @@ if [ "${CALYPSO_VERIFY:-1}" = "1" ]; then
   CALYPSO_EXIT_IP=""
   attempt=1
   while [ "$attempt" -le 3 ]; do
-    response="$(curl -s --max-time 60 https://check.torproject.org/api/ip || true)"
-    compact="${response// /}"
-    case "$compact" in
-      *'"IsTor":true'*)
-        CALYPSO_EXIT_IP="${compact##*\"IP\":\"}"
-        CALYPSO_EXIT_IP="${CALYPSO_EXIT_IP%%\"*}"
-        break
-        ;;
-      *'"IsTor":false'*)
-        echo "calypsocode: egress is NOT Tor. Refusing to start the agent." >&2
-        echo "calypsocode: the check answered, so traffic left this machine — it just" >&2
-        echo "calypsocode: did not go through Tor. Retrying will not fix that." >&2
-        exit 1
-        ;;
-      *)
-        echo "calypsocode: attempt $attempt/3 — no usable answer (dead circuit or timeout)." >&2
-        ;;
-    esac
+    # -f: an HTTP error status must not be read as an answer — with -f, curl
+    # itself fails and the body comes back empty, which parse_tor_response
+    # correctly treats as no usable answer rather than parsing a body that
+    # was never the real endpoint's success response.
+    response="$(curl -sf --max-time 60 https://check.torproject.org/api/ip || true)"
+    if parsed="$(parse_tor_response "$response")"; then
+      case "$parsed" in
+        NOTTOR)
+          echo "calypsocode: egress is NOT Tor. Refusing to start the agent." >&2
+          echo "calypsocode: the check answered, so traffic left this machine — it just" >&2
+          echo "calypsocode: did not go through Tor. Retrying will not fix that." >&2
+          exit 1
+          ;;
+        *)
+          CALYPSO_EXIT_IP="$parsed"
+          break
+          ;;
+      esac
+    else
+      echo "calypsocode: attempt $attempt/3 — no usable answer (dead circuit or timeout)." >&2
+    fi
     attempt=$((attempt + 1))
     if [ "$attempt" -le 3 ]; then sleep 2; fi
   done
@@ -1225,14 +1458,31 @@ fi
 
 if ! command -v calypsocode-agent >/dev/null 2>&1; then
   echo "calypsocode: calypsocode-agent not found — build it: github.com/MyrLeProgrammeur/calypsocode-agent" >&2
+  # CALYPSO_CHECK_RESULT is still "failed" — the EXIT trap notifies the parent
+  # that nothing is about to launch, so it does not wait out the full timeout
+  # to conclude the same thing.
   exit 127
 fi
 
-# Tells the launcher a session actually happened, so it knows whether a
-# receipt is owed.
-if [ -n "${CALYPSO_STARTED_FILE:-}" ]; then
-  : > "$CALYPSO_STARTED_FILE"
+# The handshake that keeps the evidence trustworthy. By this point the agent
+# binary is confirmed present and every check that will run has run — the
+# only thing left before the agent exists at all is this exchange with the
+# parent. "ok" tells the parent the evidence files are final and it is safe
+# to read them now; the parent then hands back the go-ahead on the second
+# FIFO only once it has copied them into its own memory. The agent process
+# therefore never coexists with unread evidence.
+CALYPSO_CHECK_RESULT="ok"
+calypso_notify_checks_done
+if [ -n "${CALYPSO_PROCEED_FIFO:-}" ]; then
+  if ! read -r -t 30 _proceed < "$CALYPSO_PROCEED_FIFO"; then
+    echo "calypsocode: parent did not acknowledge in time — refusing to launch." >&2
+    exit 1
+  fi
 fi
+
+# Never handed to the agent: these name the paths that carry verified
+# evidence, and the agent runs under the same UID with the same filesystem.
+unset CALYPSO_EGRESS_FILE CALYPSO_LEAK_FILE CALYPSO_CHECKS_DONE_FIFO CALYPSO_PROCEED_FIFO
 
 exec calypsocode-agent "$@"
 INNER_EOF
@@ -1250,17 +1500,61 @@ trap receipt_write EXIT
 trap 'receipt_write; exit 130' INT
 trap 'receipt_write; exit 143' TERM
 
+# Runs the given command (oniux or plain bash, wrapping $INNER) in the
+# background and performs the evidence handshake with it: waits for it to
+# report the checks are done, copies the verified evidence into this shell's
+# own variables — the only place the final receipt ever reads it from — and
+# only then releases the inner script to exec the agent. Sets STATUS to the
+# command's exit status. See the comment above the FIFO creation, and the
+# handshake block at the end of $INNER, for the other half of this.
+run_with_evidence_handshake() {
+  "$@" &
+  local ns_pid=$!
+
+  local result=""
+  # Generously bounded: leak probes and up to three egress retries can take
+  # real seconds, and this must not time out on a session that is simply
+  # taking its time. It exists only so a wedged or killed inner process
+  # cannot hang the launcher forever.
+  if ! read -r -t 300 result < "$CHECKS_DONE_FIFO"; then
+    result="timeout"
+  fi
+
+  case "$result" in
+    ok)
+      AGENT_LAUNCHED=1
+      if [ -f "$EGRESS_FILE" ]; then read -r VERIFIED_EXIT_IP < "$EGRESS_FILE" || true; fi
+      if [ -f "$LEAK_FILE" ]; then read -r VERIFIED_LEAK < "$LEAK_FILE" || true; fi
+      rm -f "$EGRESS_FILE" "$LEAK_FILE"
+      # Only now — with the evidence already copied above — release the inner
+      # script to exec the agent.
+      printf 'go\n' > "$PROCEED_FIFO" 2>/dev/null || true
+      ;;
+    *)
+      # Checks failed (or the handshake itself never arrived). Nothing to
+      # capture, and nothing to release: writing to PROCEED_FIFO with no
+      # reader on the other end would block forever, so this deliberately
+      # does not.
+      rm -f "$EGRESS_FILE" "$LEAK_FILE"
+      ;;
+  esac
+
+  wait "$ns_pid"
+  STATUS=$?
+  rm -f "$CHECKS_DONE_FIFO" "$PROCEED_FIFO"
+}
+
 STATUS=0
 case "$NETWORK" in
   tor)
     command -v oniux >/dev/null 2>&1 \
       || die "oniux not found — cargo install --git https://gitlab.torproject.org/tpo/core/oniux"
-    oniux bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
+    run_with_evidence_handshake oniux bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"}
     ;;
   none)
     echo "calypsocode: WARNING — network 'none'. No isolation: your real IP" >&2
     echo "calypsocode: reaches $P_API_BASE and the compartment covers identity only." >&2
-    bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"} || STATUS=$?
+    run_with_evidence_handshake bash -c "$INNER" calypsocode ${AGENT_ARGS[@]+"${AGENT_ARGS[@]}"}
     ;;
 esac
 

@@ -155,7 +155,7 @@ fork's privacy justification is a guess.
 ---
 
 Source clone kept at
-`/tmp/claude-1000/-home-matheo-dev-cloakcode/…/scratchpad/opencode-src`
+`/tmp/claude-1000/-home-<user>-dev-cloakcode/…/scratchpad/opencode-src`
 (213 MB, shallow). It is in a scratch directory and will not survive
 indefinitely — re-clone with
 `git clone --depth 1 https://github.com/sst/opencode.git` if it is gone.

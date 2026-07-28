@@ -12,14 +12,22 @@ permissions:
 
 env:
   GITLEAKS_VERSION: "8.30.1"
+  # sha256 of gitleaks_8.30.1_linux_x64.tar.gz, from the release's own
+  # gitleaks_8.30.1_checksums.txt (https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1).
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
   SHELLCHECK_VERSION: "0.11.0"
+  # sha256 of shellcheck-v0.11.0.linux.x86_64.tar.xz, from the GitHub
+  # release asset digest (`gh api repos/koalaman/shellcheck/releases/tags/v0.11.0`
+  # — shellcheck's own release process does not publish a separate
+  # checksums file).
+  SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
 
 jobs:
   # Fastest feedback first: a lint failure in seconds beats a test run.
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Pinned, not apt. The distro package lags, and its diagnostics differ
       # from a current release — which is how a locally-clean script failed
@@ -27,15 +35,17 @@ jobs:
       # not reproducible.
       - name: Install linters
         run: |
-          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
-            | tar -xJ --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          curl -sSfL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          rm shellcheck.tar.xz
           ./shellcheck --version
-          pip install --quiet yamllint
+          pip install --require-hashes -r .github/workflows/ci-requirements.txt
 
       - name: ShellCheck
         run: |
           ./shellcheck bin/calypsocode
-          ./shellcheck -x test/run.sh test/helpers.sh test/*.test.sh
+          ./shellcheck -x test/run.sh test/helpers.sh test/mutate.sh test/*.test.sh
 
       - name: Validate YAML in config/
         run: |
@@ -57,7 +67,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Hermetic: no network, no Tor, no real agent. Everything the launcher
       # talks to is stubbed, so a green run here means the logic is right, not
@@ -65,19 +75,41 @@ jobs:
       - name: Run the test suite
         run: ./test/run.sh
 
+  # A small, home-grown mutation runner (test/mutate.sh) — see its header for
+  # why this is not a general mutation-testing framework. It copies
+  # bin/calypsocode into a scratch directory, applies one exact security
+  # mutation at a time, and runs the focused suite that should catch each one.
+  #
+  # continue-on-error: true is deliberate, not a placeholder. This job is new
+  # and has not yet run clean across enough real commits to trust as a merge
+  # gate — a flaky or over-eager mutant here would otherwise block unrelated
+  # work. Promote it to blocking once it has stayed green for a few weeks of
+  # normal changes: drop continue-on-error and add `mutation-testing` to any
+  # required-checks list alongside `test`.
+  mutation-testing:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Run the mutation suite
+        run: ./test/mutate.sh
+
   # A tool whose entire subject is keeping secrets out of the wrong places has
   # no business leaking one into its own history.
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # full history, so the scan can see past commits
 
       - name: Install gitleaks
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz gitleaks
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          rm gitleaks.tar.gz
           ./gitleaks version
 
       - name: Scan working tree
@@ -85,3 +117,15 @@ jobs:
 
       - name: Scan full history
         run: ./gitleaks detect --source . --redact --exit-code 1
+
+      # Public evidence must not carry the maintainer's real OS username or
+      # home path — see docs/FINDINGS.md's finding-correction policy. Gitleaks
+      # looks for secrets, not this; a plain grep is enough.
+      - name: Scan for real local usernames/paths
+        run: |
+          pattern="/home/matheo(/|[^a-zA-Z0-9_-]|\$)"
+          if grep -rnE "$pattern" --include='*' --exclude-dir=.git \
+              --exclude='ci.yml' .; then
+            echo "Found a real local path/username in tracked files. Replace with <user>/<home>/<project> placeholders." >&2
+            exit 1
+          fi

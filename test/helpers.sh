@@ -7,8 +7,16 @@
 # Nothing touches the network, the real config, or the real agent.
 
 TESTS_RUN=0
+TESTS_PASSED=0
 TESTS_FAILED=0
+TESTS_SKIPPED=0
+# Informational only: how many individual assertions failed in total. Several
+# failed assertions inside one test function still count as ONE failed test
+# above — TESTS_FAILED tracks test functions, this tracks assertions.
+ASSERTIONS_FAILED=0
 CURRENT_TEST=""
+CURRENT_TEST_FAILED=0
+CURRENT_TEST_SKIPPED=0
 FAILURES=()
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +29,38 @@ STATUS=0
 
 # --- sandbox ---------------------------------------------------------------
 
+# Strips every launcher-facing, provider and identity variable the developer's
+# own shell might happen to have set, before a single test runs. An inherited
+# CALYPSO_NETWORK=none, for instance, silently changes which branch of the
+# egress suite actually runs — and it did, once, before this existed. Each
+# test then sets only what it actually needs on top of this.
+_sanitize_env() {
+  local v
+  # CALYPSO_/OPENCODE_-prefixed: whatever the developer's own shell (or a
+  # previous, unrelated launch) happens to have exported. CALYPSO_BIN is the
+  # harness's own handle on the binary under test, not a launcher-facing
+  # variable, so it is deliberately spared.
+  for v in $(compgen -v | grep -E '^(CALYPSO_|OPENCODE_)' | grep -v '^CALYPSO_BIN$'); do
+    unset "$v"
+  done
+  # XDG_CONFIG_HOME in particular feeds CALYPSO_HOME's own default, so an
+  # inherited one would change where a test believes its sandbox lives before
+  # sandbox_setup ever assigns CALYPSO_HOME below.
+  unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME
+  # A leak/egress test that unintentionally inherited one of these would be
+  # probing a different network than the one it thinks it is probing.
+  unset ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy NO_PROXY no_proxy
+  # Identity the launcher sets per-compartment; leaking the developer's own
+  # here would mask a launcher bug that fails to override it.
+  unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL \
+        GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_SSH GIT_SSH_COMMAND \
+        SSH_AUTH_SOCK GNUPGHOME EMAIL
+  # Provider secrets a test profile's API_KEY_ENV might happen to name.
+  unset VENICE_API_KEY_ACME TEST_KEY TEST_KEY_2 SOURCE_KEY NEW_KEY
+}
+
 sandbox_setup() {
+  _sanitize_env 2>/dev/null || true
   SANDBOX="$(mktemp -d)"
   mkdir -p "$SANDBOX"/{profiles,home,state,bin,project}
   export CALYPSO_PROFILE_DIR="$SANDBOX/profiles"
@@ -32,8 +71,6 @@ sandbox_setup() {
   # would fall through to the real agent, which waits on its TUI forever. CI
   # never caught it because CI has neither binary.
   export PATH="$SANDBOX/bin:/usr/bin:/bin"
-  # Tests must never depend on the developer's real key.
-  unset VENICE_API_KEY_ACME TEST_KEY 2>/dev/null || true
 }
 
 sandbox_teardown() {
@@ -62,11 +99,18 @@ EOF
 }
 
 # A stub agent that records the environment it was launched with.
+#
+# Argv is recorded two ways: `args=$*` for the simple cases that only care
+# about a flattened string, and a NUL-delimited stream in $SANDBOX/agent-argv
+# for anything that needs to prove argv *boundaries* survived — `$*` cannot
+# tell "one arg with a space" from "two args", and no NUL byte can ever occur
+# inside a real argv element, so it is an unambiguous separator.
 stub_calypsocode_agent() {
   local exit_code="${1:-0}"
   cat > "$SANDBOX/bin/calypsocode-agent" <<EOF
 #!/usr/bin/env bash
 echo "STUB_CALYPSOCODE_AGENT_RAN args=\$*"
+printf '%s\0' "\$@" > "$SANDBOX/agent-argv"
 for v in LC_ALL LANG TZ GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME \\
          GIT_COMMITTER_EMAIL XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME \\
          OPENCODE_CONFIG OPENCODE_DISABLE_AUTOUPDATE OPENCODE_DISABLE_MODELS_FETCH \\
@@ -78,18 +122,80 @@ EOF
   chmod +x "$SANDBOX/bin/calypsocode-agent"
 }
 
+# Reads the stub agent's recorded argv into the array named by $1, using the
+# NUL-delimited stream — never a flattened string, and never `eval` or a
+# reconstructed command line.
+read_agent_argv() {
+  local -n _out="$1"
+  mapfile -d '' -t _out < "$SANDBOX/agent-argv"
+}
+
+# Compares the stub agent's recorded argv, element for element, against the
+# arguments given here.
+assert_agent_argv() {
+  # Named apart from the scalar `want`/`got` in assert_status and assert_mode.
+  # A name carries one type per file for the linter, so reusing them here would
+  # make those scalar reads look like an array expanded without an index.
+  local -a want_argv=("$@") got_argv=()
+  read_agent_argv got_argv
+  if [ "${#got_argv[@]}" != "${#want_argv[@]}" ]; then
+    _fail "expected ${#want_argv[@]} argv element(s), got ${#got_argv[@]}" "$(printf '%q\n' "${got_argv[@]}")"
+    return
+  fi
+  local i
+  for i in "${!want_argv[@]}"; do
+    if [ "${got_argv[$i]}" != "${want_argv[$i]}" ]; then
+      _fail "argv[$i]: expected $(printf '%q' "${want_argv[$i]}"), got $(printf '%q' "${got_argv[$i]:-}")"
+      return
+    fi
+  done
+}
+
 # Removes the agent from PATH, simulating "not installed".
 no_calypsocode_agent() { rm -f "$SANDBOX/bin/calypsocode-agent"; }
 
 # Runs the command it is given, in this namespace. Enough to exercise the whole
 # inner script without Tor: what oniux adds is isolation, and isolation is what
 # the curl stub below simulates.
+#
+# Also records that it was called, and with exactly what: a mutant swapping
+# `oniux bash -c ...` for plain `bash -c ...` would still pass every
+# egress/leak test if nothing ever confirmed oniux itself ran. One counter
+# line per call, and the argv of the most recent call, NUL-delimited so an
+# empty or oddly-quoted argument cannot be confused with a field boundary.
 stub_oniux() {
-  cat > "$SANDBOX/bin/oniux" <<'EOF'
+  cat > "$SANDBOX/bin/oniux" <<EOF
 #!/usr/bin/env bash
-exec "$@"
+echo 1 >> "$SANDBOX/oniux-invocations.count"
+printf '%s\0' "\$@" > "$SANDBOX/oniux-invocations.argv"
+exec "\$@"
 EOF
   chmod +x "$SANDBOX/bin/oniux"
+}
+
+oniux_invocation_count() {
+  if [ -f "$SANDBOX/oniux-invocations.count" ]; then
+    wc -l < "$SANDBOX/oniux-invocations.count" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+# Exactly one oniux invocation, running `bash -c <inner> calypsocode ...` —
+# the shape the launcher is documented to use, not just "oniux ran".
+assert_oniux_invoked_once_with_inner_command() {
+  local count; count="$(oniux_invocation_count)"
+  [ "$count" = "1" ] || { _fail "expected exactly one oniux invocation, got $count"; return; }
+  [ -f "$SANDBOX/oniux-invocations.argv" ] || { _fail "no oniux invocation was recorded"; return; }
+  local -a argv
+  mapfile -d '' -t argv < "$SANDBOX/oniux-invocations.argv"
+  [ "${argv[0]:-}" = "bash" ] || _fail "expected oniux to invoke bash, got '${argv[0]:-}'"
+  [ "${argv[1]:-}" = "-c" ] || _fail "expected -c as bash's second argument, got '${argv[1]:-}'"
+  [ "${argv[3]:-}" = "calypsocode" ] || _fail "expected \$0 of the inner script to be 'calypsocode', got '${argv[3]:-}'"
+}
+
+assert_oniux_never_invoked() {
+  [ "$(oniux_invocation_count)" = "0" ] || _fail "expected NETWORK=none never to invoke oniux, but it was invoked $(oniux_invocation_count) time(s)"
 }
 
 # Makes leak-target discovery deterministic. Without it the tests would probe
@@ -135,15 +241,20 @@ case "$url" in
     # The egress check, driven by:
     #   STUB_EGRESS_ANSWERS   what to echo, verbatim. Default: a Tor exit.
     #   STUB_EGRESS_FAIL_N    fail this many attempts before answering, so the
-    #                         retry loop can be exercised. Counted in a file
-    #                         because each attempt is a fresh process.
-    if [ -n "${STUB_EGRESS_FAIL_N:-}" ]; then
-      counter="${STUB_EGRESS_COUNTER:-/dev/null}"
+    #                         retry loop can be exercised.
+    #   STUB_EGRESS_COUNTER   counts every attempt, regardless of outcome —
+    #                         set whenever a test needs to assert exactly how
+    #                         many requests were made, not just infer it from
+    #                         output text. Counted in a file because each
+    #                         attempt is a fresh process.
+    if [ -n "${STUB_EGRESS_COUNTER:-}" ]; then
       n=0
-      [ -f "$counter" ] && n="$(cat "$counter")"
+      [ -f "$STUB_EGRESS_COUNTER" ] && n="$(cat "$STUB_EGRESS_COUNTER")"
       n=$((n + 1))
-      echo "$n" > "$counter"
-      if [ "$n" -le "$STUB_EGRESS_FAIL_N" ]; then exit 7; fi
+      echo "$n" > "$STUB_EGRESS_COUNTER"
+    fi
+    if [ -n "${STUB_EGRESS_FAIL_N:-}" ] && [ "${n:-0}" -le "$STUB_EGRESS_FAIL_N" ]; then
+      exit 7
     fi
     printf '%s\n' "${STUB_EGRESS_ANSWERS-{\"IsTor\":true,\"IP\":\"185.220.101.1\"\}}"
     exit 0
@@ -193,11 +304,25 @@ stub_namespace() {
 stub_no_curl() {
   mkdir -p "$SANDBOX/nocurl"
   local c
-  for c in bash env id date mkdir rm cat tr sed awk cut sort head grep timeout uname sleep printf; do
+  for c in bash env id date mkdir rm cat tr sed awk cut sort head grep timeout uname sleep printf mkfifo; do
     [ -x "/usr/bin/$c" ] && ln -sf "/usr/bin/$c" "$SANDBOX/nocurl/$c"
     [ -x "/bin/$c" ] && ln -sf "/bin/$c" "$SANDBOX/nocurl/$c"
   done
   export PATH="$SANDBOX/bin:$SANDBOX/nocurl"
+}
+
+# A PATH with everything `doctor` needs except `ip` and `ss` — so their
+# absence can be asserted in isolation, without curl or oniux also appearing
+# to be missing. Call after stub_oniux/stub_calypsocode_agent, which write
+# into $SANDBOX/bin and stay reachable since that stays first in PATH.
+stub_no_leak_tools() {
+  mkdir -p "$SANDBOX/noleaktools"
+  local c
+  for c in bash env id date mkdir rm cat tr sed awk cut sort head grep timeout uname sleep printf curl python3; do
+    [ -x "/usr/bin/$c" ] && ln -sf "/usr/bin/$c" "$SANDBOX/noleaktools/$c"
+    [ -x "/bin/$c" ] && ln -sf "/bin/$c" "$SANDBOX/noleaktools/$c"
+  done
+  export PATH="$SANDBOX/bin:$SANDBOX/noleaktools"
 }
 
 # Listening ports, as `ss -ltn` prints them. Stubbed so the suite never reads the
@@ -241,10 +366,24 @@ run_calypso_tty() {
 
 have_pty() { command -v script >/dev/null 2>&1; }
 
+# Explicit skip, with a reason — for a test whose prerequisite (a PTY via
+# `script`, typically) is missing in this environment. Distinct from a pass:
+# a test that could not run is not a test that passed, so it must show up as
+# its own bucket rather than silently inflating the pass count. Call and then
+# `return 0` from the test.
+skip() {
+  CURRENT_TEST_SKIPPED=1
+  echo "  SKIP  $CURRENT_TEST — $1"
+}
+
 # --- assertions ------------------------------------------------------------
 
+# Counts assertions, not test functions: several failed assertions inside one
+# test still make that test count as ONE failure, tallied once in run_tests
+# after the function returns.
 _fail() {
-  TESTS_FAILED=$((TESTS_FAILED + 1))
+  ASSERTIONS_FAILED=$((ASSERTIONS_FAILED + 1))
+  CURRENT_TEST_FAILED=1
   FAILURES+=("$CURRENT_TEST: $1")
   echo "  FAIL  $CURRENT_TEST"
   echo "        $1"
@@ -286,6 +425,17 @@ assert_equals() {
   [ "$1" = "$2" ] || _fail "expected '$2', got '$1'"
 }
 
+# Octal permission bits only, portable between GNU and BSD stat.
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
+}
+
+assert_mode() {
+  local path="$1" want="$2" got
+  got="$(file_mode "$path")"
+  [ "$got" = "$want" ] || _fail "expected mode $want on $path, got $got"
+}
+
 # Counts receipts written in the sandbox state dir.
 receipt_count() {
   find "$SANDBOX/state" -maxdepth 1 -name 'receipt-*.txt' 2>/dev/null | wc -l | tr -d ' '
@@ -303,16 +453,32 @@ run_tests() {
   echo "── $suite"
   for fn in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
     CURRENT_TEST="$fn"
+    CURRENT_TEST_FAILED=0
+    CURRENT_TEST_SKIPPED=0
     TESTS_RUN=$((TESTS_RUN + 1))
     sandbox_setup
     "$fn" || true
     sandbox_teardown
+
+    # One bucket per test function, not per assertion — see _fail(). Skip
+    # takes precedence: a test that skips and also happens to trip a stray
+    # assertion first is still a skip, not a failure, since it never ran its
+    # real body.
+    if [ "$CURRENT_TEST_SKIPPED" = "1" ]; then
+      TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+    elif [ "$CURRENT_TEST_FAILED" = "1" ]; then
+      TESTS_FAILED=$((TESTS_FAILED + 1))
+    else
+      TESTS_PASSED=$((TESTS_PASSED + 1))
+    fi
   done
 
+  local summary="   $TESTS_PASSED/$TESTS_RUN passed"
+  [ "$TESTS_SKIPPED" -gt 0 ] && summary="$summary, $TESTS_SKIPPED skipped"
   if [ "$TESTS_FAILED" -gt 0 ]; then
-    echo "   $((TESTS_RUN - TESTS_FAILED))/$TESTS_RUN passed, $TESTS_FAILED FAILED"
+    echo "$summary, $TESTS_FAILED FAILED ($ASSERTIONS_FAILED assertion(s))"
     return 1
   fi
-  echo "   $TESTS_RUN/$TESTS_RUN passed"
+  echo "$summary"
   return 0
 }
