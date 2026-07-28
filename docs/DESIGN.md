@@ -301,7 +301,7 @@ session:      2026-07-24T14:02:11Z – 2026-07-24T15:31:44Z (5373s)
 
 NOT removed:  prompt content, source code, writing style
               session timing — the times above are what the provider saw
-              OS username 'matheo' is in your project path (/home/matheo/dev/acme)
+              OS username '<user>' is in your project path (<home>/dev/acme)
               account: $VENICE_API_KEY_ACME at api.venice.ai — the provider
                        knows which paying customer this was
 

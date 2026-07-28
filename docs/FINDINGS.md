@@ -15,6 +15,16 @@ reproducible, including by their author after the next `cargo install`. If the
 installed revision differs from this one, treat them as expired rather than as facts.
 `calypsocode doctor` prints what is actually installed.
 
+**Corrections.** When a finding turns out to have been stated wrong, it is
+corrected in place and labelled `**Correction, <date>.**`, not deleted — see
+the example under [F7](#f7--home-is-shared-with-the-host-only-tmp-is-private)
+and the caveat under [F12](#f12--the-compiled-calypsocode-agent-holds-a-real-session-over-tor).
+Replacing a real local username or home path with a placeholder (`<user>`,
+`<home>`, `<project>`) is the same category of edit: a privacy redaction, not
+a retraction. It does not change what was measured or what the finding
+concludes — only which literal string stands in for a path that was never
+part of the technical result.
+
 ---
 
 ## F1 — A host process cannot reach a port bound inside oniux
@@ -249,8 +259,8 @@ But config is not the compartment. With only `XDG_CONFIG_HOME` set,
 
 ```
 config     …/compartments/gate/opencode      ← moved
-data       /home/matheo/.local/share/opencode ← SHARED
-state      /home/matheo/.local/state/opencode ← SHARED
+data       <home>/.local/share/opencode ← SHARED
+state      <home>/.local/state/opencode ← SHARED
 ```
 
 `data` is where session history and stored provider credentials live. Two
@@ -478,7 +488,7 @@ compiled one, which is what ruled out the compile as the cause.
   At most one of the three could have failed. Measured and replaced —
   [F14](#f14--the-leak-test-could-not-fail-and-what-it-takes-to-make-it-able-to). The
   number here is left as printed, because it is what the tool said.
-- The receipt correctly flagged `OS username 'matheo' is in your project path` —
+- The receipt correctly flagged `OS username '<user>' is in your project path` —
   the session ran under `$HOME` because the three attempts before it had been run
   under `/tmp`. **Correction:** an earlier version of this entry said the
   documented mitigation for that leak was unavailable inside the namespace, and

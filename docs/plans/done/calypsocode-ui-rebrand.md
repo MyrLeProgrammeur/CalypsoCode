@@ -33,7 +33,7 @@ OpenCode. Do not start this under the current plan.
   moves.
 - `docs/DESIGN.md` — the signal table; Batch 5 exists to move one row of it.
 - Design reference:
-  `/home/matheo/Téléchargements/CloakCode logo round two_files/CalypsoCode Architecture.dc.html`
+  `<home>/Téléchargements/CloakCode logo round two_files/CalypsoCode Architecture.dc.html`
   — source of the color palette below. **This is a web mockup, not a TUI
   mockup.** Extract the hex values only; do not try to reproduce its
   gradients/blur/box-shadow pixel-for-pixel in a terminal. (Folder name says

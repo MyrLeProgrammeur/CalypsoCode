@@ -14,7 +14,7 @@ assumptions.
   `gh repo view` reports the fork's parent as `anomalyco/opencode`; `sst/opencode`
   is the name used in prior planning docs and redirects/aliases to it).
   Default branch: `dev`.
-- **Local clone:** `/home/matheo/dev/calypsocode-agent` — a sibling of this
+- **Local clone:** `<project-siblings>/calypsocode-agent` — a sibling of this
   repo, **not** a subdirectory or submodule (Settled decision 12). It has
   its own `origin` (the fork) and `upstream` (`anomalyco/opencode`) remotes
   wired for future `git fetch upstream && git rebase`.
@@ -27,7 +27,7 @@ assumptions.
 gh repo fork sst/opencode --fork-name calypsocode-agent --clone=false
 
 # 2. Clone as a sibling directory
-cd /home/matheo/dev
+cd <home>/dev
 git clone https://github.com/MyrLeProgrammeur/calypsocode-agent.git calypsocode-agent
 cd calypsocode-agent
 git remote add upstream https://github.com/anomalyco/opencode.git
