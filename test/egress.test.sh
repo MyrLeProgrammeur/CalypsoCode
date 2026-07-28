@@ -26,6 +26,7 @@ test_a_tor_exit_is_accepted_and_named() {
   assert_status 0
   assert_contains "egress verified — Tor exit 185.220.101.1"
   assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
+  assert_oniux_invoked_once_with_inner_command
 }
 
 # Mutation: accept a non-Tor exit. The check answering at all means traffic left the
@@ -40,13 +41,16 @@ test_a_non_tor_exit_refuses_the_launch() {
 }
 
 # A definite negative must not be retried. Retrying implies it might pass, and it
-# cannot — the answer arrived and said no.
+# cannot — the answer arrived and said no. Counts the actual requests made,
+# rather than only inferring the absence of a retry from output text.
 test_a_non_tor_exit_is_not_retried() {
   write_profile
   stub_namespace
-  STUB_EGRESS_ANSWERS='{"IsTor":false,"IP":"88.120.4.9"}' launch
+  STUB_EGRESS_ANSWERS='{"IsTor":false,"IP":"88.120.4.9"}' \
+    STUB_EGRESS_COUNTER="$SANDBOX/egress-attempts" launch
   assert_status 1
   assert_not_contains "attempt 2/3"
+  assert_equals "$(cat "$SANDBOX/egress-attempts")" "1"
 }
 
 # Mutation: accept any answer mentioning IsTor, true or false. A substring match on
@@ -82,6 +86,7 @@ test_the_retry_survives_two_dead_circuits() {
   assert_contains "attempt 2/3"
   assert_contains "egress verified — Tor exit 185.220.101.1"
   assert_equals "$(cat "$SANDBOX/egress-attempts")" "3"
+  assert_oniux_invoked_once_with_inner_command
 }
 
 # Three failures is the limit, and the message points at F4 rather than blaming the
@@ -169,6 +174,169 @@ test_a_missing_curl_does_not_masquerade_as_an_unreachable_network() {
   launch
   assert_status 1
   assert_not_contains "no target on the host answered"
+}
+
+# Trust boundary: the agent runs under the same UID as the launcher and, until
+# this was fixed, was handed the paths of the not-yet-final egress/leak
+# evidence files and never had them un-exported — so a hostile agent could
+# rewrite its own verified receipt evidence before the launcher wrote the
+# receipt. Writes a hostile stub agent that searches for and tampers with
+# every plausible piece of evidence, across every way a session can end.
+_write_hostile_agent() {
+  local mode="$1"  # exit0 | exit7 | sigint | sigterm
+  cat > "$SANDBOX/bin/calypsocode-agent" <<EOF
+#!/usr/bin/env bash
+echo "STUB_CALYPSOCODE_AGENT_RAN"
+for v in CALYPSO_EGRESS_FILE CALYPSO_LEAK_FILE CALYPSO_STARTED_FILE \\
+         CALYPSO_CHECKS_DONE_FIFO CALYPSO_PROCEED_FIFO; do
+  if [ -n "\${!v:-}" ]; then echo "LEAKED_ENV \$v=\${!v}"; fi
+done
+for f in "$CALYPSO_STATE_DIR"/.egress-* "$CALYPSO_STATE_DIR"/.leak-* \\
+         "$CALYPSO_STATE_DIR"/.started-*; do
+  [ -e "\$f" ] || continue
+  echo "tampered" > "\$f" 2>/dev/null && echo "TAMPERED \$f"
+done
+case "$mode" in
+  exit0) exit 0 ;;
+  exit7) exit 7 ;;
+  sigint|sigterm) sleep 3 ;;
+esac
+EOF
+  chmod +x "$SANDBOX/bin/calypsocode-agent"
+}
+
+_assert_evidence_survived_tampering() {
+  assert_not_contains "LEAKED_ENV"
+  case "$(receipt_body)" in
+    *"exit 185.220.101.1"*) ;;
+    *) _fail "receipt evidence was altered or missing after a hostile agent" "$(receipt_body)" ;;
+  esac
+}
+
+test_hostile_agent_cannot_alter_evidence_on_normal_exit() {
+  write_profile
+  stub_oniux; stub_ip; stub_ss; stub_curl
+  _write_hostile_agent exit0
+  launch
+  assert_status 0
+  _assert_evidence_survived_tampering
+}
+
+test_hostile_agent_cannot_alter_evidence_on_nonzero_exit() {
+  write_profile
+  stub_oniux; stub_ip; stub_ss; stub_curl
+  _write_hostile_agent exit7
+  launch
+  assert_status 7
+  _assert_evidence_survived_tampering
+}
+
+_hostile_signal_test() {
+  local sig="$1" mode="$2" want_status="$3"
+  write_profile
+  stub_oniux; stub_ip; stub_ss; stub_curl
+  _write_hostile_agent "$mode"
+
+  set -m
+  TEST_KEY=k "$CALYPSO_BIN" --profile default --yes > "$SANDBOX/out" 2>&1 &
+  local pid=$!
+  set +m
+
+  local waited=0
+  while ! grep -q STUB_CALYPSOCODE_AGENT_RAN "$SANDBOX/out" 2>/dev/null; do
+    sleep 0.2
+    waited=$((waited + 1))
+    [ "$waited" -gt 50 ] && break
+  done
+  # Give the hostile agent a moment to actually perform its tampering before
+  # it is signalled.
+  sleep 0.3
+
+  kill -"$sig" -"$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  STATUS=$?
+  OUTPUT="$(cat "$SANDBOX/out")"
+
+  assert_status "$want_status"
+  _assert_evidence_survived_tampering
+}
+
+test_hostile_agent_cannot_alter_evidence_on_sigint() { _hostile_signal_test INT sigint 130; }
+test_hostile_agent_cannot_alter_evidence_on_sigterm() { _hostile_signal_test TERM sigterm 143; }
+
+# Structural parsing (item 7): a substring match on `"IsTor":true` is
+# satisfied by string/number values, by a decoy elsewhere in the body, and by
+# whichever of two duplicate fields comes first. Each of these must be
+# refused — not accepted as a pass — while genuine whitespace and field-order
+# variation (both legitimate from a real server) must still be accepted.
+
+test_whitespace_and_reordered_fields_are_still_accepted() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{ "IP" :  "185.220.101.1" , "IsTor":   true }' launch
+  assert_status 0
+  assert_contains "egress verified — Tor exit 185.220.101.1"
+}
+
+test_duplicate_istor_field_is_refused() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"IsTor":true,"IsTor":false,"IP":"185.220.101.1"}' launch
+  assert_status 1
+  assert_contains "could not confirm Tor egress"
+  assert_not_contains "egress verified"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_decoy_substring_elsewhere_in_the_body_does_not_fake_a_pass() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"note":"totally legit \"IsTor\":true","IsTor":false,"IP":"9.9.9.9"}' launch
+  assert_status 1
+  assert_contains "egress is NOT Tor"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_istor_as_a_string_is_not_a_boolean_and_is_refused() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"IsTor":"true","IP":"185.220.101.1"}' launch
+  assert_status 1
+  assert_contains "could not confirm Tor egress"
+  assert_not_contains "egress verified"
+}
+
+test_istor_as_a_number_is_not_a_boolean_and_is_refused() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"IsTor":1,"IP":"185.220.101.1"}' launch
+  assert_status 1
+  assert_contains "could not confirm Tor egress"
+}
+
+test_an_ip_that_does_not_parse_is_refused() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"IsTor":true,"IP":"999.999.999.999"}' launch
+  assert_status 1
+  assert_contains "could not confirm Tor egress"
+}
+
+test_a_valid_ipv6_exit_is_accepted() {
+  write_profile
+  stub_namespace
+  STUB_EGRESS_ANSWERS='{"IsTor":true,"IP":"2001:db8::1"}' launch
+  assert_status 0
+  assert_contains "egress verified — Tor exit 2001:db8::1"
+}
+
+test_an_oversized_body_is_refused_even_if_otherwise_well_formed() {
+  write_profile
+  stub_namespace
+  local pad; pad="$(head -c 5000 < /dev/zero | tr '\0' 'a')"
+  STUB_EGRESS_ANSWERS="{\"IsTor\":true,\"IP\":\"185.220.101.1\",\"pad\":\"$pad\"}" launch
+  assert_status 1
+  assert_contains "could not confirm Tor egress"
 }
 
 run_tests

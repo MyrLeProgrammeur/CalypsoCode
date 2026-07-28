@@ -39,7 +39,7 @@ write_source_profile() {
 }
 
 test_new_profile_writes_a_profile_from_the_answers() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   assert_file_exists "$(profile_path)"
@@ -54,7 +54,7 @@ test_new_profile_writes_a_profile_from_the_answers() {
 # Creating and entering a compartment are separate acts. Merging them is what
 # turned a mistyped --profile into a new compartment.
 test_new_profile_does_not_launch() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   assert_file_exists "$(profile_path)"
@@ -64,7 +64,7 @@ test_new_profile_does_not_launch() {
 # MODELS is what the in-session picker offers. The wizard used to drop it
 # silently, so a profile it wrote could never offer a second model.
 test_extra_models_are_written_when_given() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty '1
 https://api.example.invalid/v1
@@ -81,7 +81,7 @@ dev@localhost
 }
 
 test_no_extra_models_writes_no_models_line() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   local body
@@ -93,7 +93,7 @@ test_no_extra_models_writes_no_models_line() {
 
 # The whole reason creation moved out of the launch path.
 test_a_missing_profile_is_an_error_not_an_invitation() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --profile gaet
   assert_status 1
@@ -122,7 +122,7 @@ test_a_missing_profile_says_so_when_there_are_none() {
 
 # What describes the provider carries over; what identifies you does not.
 test_from_copies_the_network_and_the_provider() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   write_source_profile
   run_calypso_tty 'NEW_KEY
@@ -141,7 +141,7 @@ dev@localhost
 # Two compartments sharing a key are one customer to the provider, so the key
 # variable is asked for again rather than copied.
 test_from_does_not_copy_the_key_variable() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   write_source_profile
   run_calypso_tty 'NEW_KEY
@@ -186,7 +186,7 @@ test_a_name_that_hides_from_a_listing_is_refused() {
 
 # --yes means "do not ask me", which cannot mean "choose a backend for me".
 test_yes_cannot_answer_the_questions() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default --yes
   assert_status 1
@@ -218,7 +218,7 @@ test_no_tty_refuses_instead_of_picking() {
 # A binary on disk is not a working stack. Claiming otherwise is what the first
 # doctor did, and the picker must not reintroduce it in colour.
 test_tor_is_offered_as_installed_but_unverified() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   assert_contains "oniux installed, not yet verified"
@@ -226,7 +226,7 @@ test_tor_is_offered_as_installed_but_unverified() {
 }
 
 test_tor_is_marked_unavailable_when_oniux_is_missing() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_calypsocode_agent
   stub_ip
   stub_curl
@@ -245,7 +245,7 @@ dev@localhost
 # Offering something that does not exist would be the picker lying in its very
 # first sentence.
 test_a_backend_that_is_not_built_is_refused_and_re_asked() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty '3
 2
@@ -264,7 +264,7 @@ dev@localhost
 }
 
 test_socks_is_not_sold_as_a_faster_tor() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   assert_contains "not \"Tor but faster\""
@@ -273,7 +273,7 @@ test_socks_is_not_sold_as_a_faster_tor() {
 # The choice has exactly one home. A remembered default living anywhere else is
 # how a profile that says `tor` ends up running something quieter.
 test_the_choice_is_stored_only_in_the_profile() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" --new-profile default
   assert_file_exists "$(profile_path)"
@@ -285,7 +285,7 @@ test_the_choice_is_stored_only_in_the_profile() {
 
 # The profile names the variable; the secret stays in the environment.
 test_the_key_value_is_never_written_to_the_profile() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   TEST_KEY=super-secret-value run_calypso_tty "$ANSWERS_TOR" --new-profile default
   local body
@@ -298,10 +298,30 @@ test_the_key_value_is_never_written_to_the_profile() {
 
 # `doctor` reports; it does not create things behind the user's back.
 test_doctor_does_not_create_a_profile() {
-  have_pty || return 0
+  have_pty || { skip "script (pty) not installed"; return 0; }
   stub_namespace
   run_calypso_tty "$ANSWERS_TOR" doctor
   assert_no_file "$(profile_path)"
+}
+
+# The written profile holds nothing secret today, but the file and its
+# directory are private regardless — set once, globally, rather than left to
+# the invoking shell's umask.
+test_new_profile_and_its_directory_are_private_under_a_permissive_parent_umask() {
+  have_pty || { skip "script (pty) not installed"; return 0; }
+  stub_namespace
+  # Freshly created by the launcher itself under the test umask below: the
+  # sandbox's own profiles/ dir already exists from sandbox_setup, made under
+  # whatever umask the test harness happened to run with, which would prove
+  # nothing about the launcher's own umask 077.
+  rmdir "$CALYPSO_PROFILE_DIR" 2>/dev/null || true
+  local old_umask; old_umask="$(umask)"
+  umask 022
+  run_calypso_tty "$ANSWERS_TOR" --new-profile default
+  umask "$old_umask"
+  assert_file_exists "$(profile_path)"
+  assert_mode "$CALYPSO_PROFILE_DIR" 700
+  assert_mode "$(profile_path)" 600
 }
 
 run_tests

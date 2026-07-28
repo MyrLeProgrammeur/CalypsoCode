@@ -66,6 +66,43 @@ test_doctor_shows_the_same_command() {
   assert_contains "set -Ux TEST_KEY"
 }
 
+# leak_candidates() needs `ip` and `ss`, but doctor did not check for either —
+# their absence used to surface later as a misleading "no target on the host
+# answered", which reads as a network problem rather than a missing tool.
+test_doctor_reports_missing_ip() {
+  write_profile
+  stub_calypsocode_agent
+  stub_oniux
+  stub_no_leak_tools
+  TEST_KEY=k run_calypso doctor --profile default
+  assert_status 1
+  assert_contains "FAIL  ip not found"
+}
+
+test_doctor_reports_missing_ss() {
+  write_profile
+  stub_calypsocode_agent
+  stub_oniux
+  stub_no_leak_tools
+  TEST_KEY=k run_calypso doctor --profile default
+  assert_status 1
+  assert_contains "FAIL  ss not found"
+}
+
+# NETWORK=none has no namespace to leak-test, so ip/ss must not be checked at
+# all — matching how the oniux check is skipped for the same reason.
+test_doctor_does_not_check_ip_or_ss_for_network_none() {
+  write_profile default \
+    "NETWORK=none" "API_KEY_ENV=TEST_KEY" "API_BASE=https://x.invalid" \
+    "MODEL=m" "GIT_NAME=n" "GIT_EMAIL=e@f"
+  stub_calypsocode_agent
+  stub_no_leak_tools
+  TEST_KEY=k run_calypso doctor --profile default
+  assert_status 0
+  assert_not_contains "ip not found"
+  assert_not_contains "ss not found"
+}
+
 test_identity_environment_reaches_the_agent() {
   write_profile
   stub_calypsocode_agent
@@ -96,9 +133,72 @@ test_all_compartment_paths_move_together() {
 test_agent_arguments_are_passed_through() {
   write_profile
   stub_calypsocode_agent
-  TEST_KEY=k launch run "fix the bug"
+  TEST_KEY=k launch -- run "fix the bug"
   assert_status 0
   assert_contains "STUB_CALYPSOCODE_AGENT_RAN args=run fix the bug"
+  assert_agent_argv run "fix the bug"
+}
+
+# Argv boundaries have to survive every layer between the launcher's own
+# argument parsing and the agent's exec: an array the whole way, never a
+# flattened string rebuilt with `eval` or word-splitting, which cannot tell
+# "one argument with a space" from "two arguments" and would silently merge
+# or split things a real caller never asked for.
+test_an_empty_argument_survives_as_its_own_element() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- run "" done
+  assert_status 0
+  assert_agent_argv run "" done
+}
+
+test_an_argument_containing_only_whitespace_is_not_split() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- "run   this" "  leading and trailing  "
+  assert_status 0
+  assert_agent_argv "run   this" "  leading and trailing  "
+}
+
+test_a_multiline_argument_survives_intact() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- run "line one
+line two
+line three"
+  assert_status 0
+  assert_agent_argv run "line one
+line two
+line three"
+}
+
+test_a_unicode_argument_survives_intact() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- run "fïx thé bùg 日本語 🐛"
+  assert_status 0
+  assert_agent_argv run "fïx thé bùg 日本語 🐛"
+}
+
+# Glob and quote characters must reach the agent literally, not expanded or
+# stripped by any intermediate shell layer.
+test_glob_and_quote_characters_are_not_interpreted() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- '*.txt' 'a "quoted" word' "it's" '$HOME' '`cmd`'
+  assert_status 0
+  assert_agent_argv '*.txt' 'a "quoted" word' "it's" '$HOME' '`cmd`'
+}
+
+# An argument that starts with a dash must reach the agent as an argument,
+# not be reinterpreted as an option by anything between the launcher's own
+# parsing and the agent's exec.
+test_a_leading_dash_argument_is_not_reinterpreted() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- --model some/model -x
+  assert_status 0
+  assert_agent_argv --model some/model -x
 }
 
 test_generated_agent_config_matches_the_profile() {
@@ -202,6 +302,17 @@ test_none_mode_warns_that_there_is_no_isolation() {
   assert_contains "No isolation"
 }
 
+# NETWORK=none must never invoke oniux at all — there is no namespace to run
+# checks inside of, and no isolation to claim.
+test_none_mode_never_invokes_oniux() {
+  write_profile
+  stub_calypsocode_agent
+  stub_oniux
+  TEST_KEY=k launch
+  assert_status 0
+  assert_oniux_never_invoked
+}
+
 test_missing_agent_fails_clearly() {
   write_profile
   no_calypsocode_agent
@@ -215,6 +326,72 @@ test_agent_exit_status_is_propagated() {
   stub_calypsocode_agent 42
   TEST_KEY=k launch
   assert_status 42
+}
+
+# oniux gives the namespace a private /tmp (docs/FINDINGS.md F6/F7): a project
+# directory under the host's /tmp does not exist inside it at all, and the
+# agent used to fail with an opaque, unrelated-looking error only once the
+# namespace was already running. Caught before launch instead. Gated to
+# NETWORK=tor specifically — NETWORK=none never creates a namespace, so there
+# is no private /tmp to be hidden by.
+test_working_directory_directly_under_tmp_is_refused() {
+  write_profile
+  stub_calypsocode_agent
+  local dir back="$PWD"
+  dir="$(mktemp -d)"
+  cd "$dir" || _fail "could not enter the tmp test directory"
+  TEST_KEY=k run_calypso --profile default --yes
+  cd "$back" || true
+  rmdir "$dir" 2>/dev/null || true
+  assert_status 1
+  assert_contains "under /tmp"
+  assert_contains "private /tmp"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+# A symlink whose own path is outside /tmp, but which resolves into it, must
+# be caught the same way — it does not exist inside the namespace either.
+test_symlink_resolving_into_tmp_is_refused() {
+  write_profile
+  stub_calypsocode_agent
+  local target link back="$PWD"
+  target="$(mktemp -d)"
+  link="/var/tmp/calypso-test-link-$$"
+  ln -s "$target" "$link" || _fail "could not create the test symlink"
+  cd "$link" || _fail "could not enter the symlinked test directory"
+  TEST_KEY=k run_calypso --profile default --yes
+  cd "$back" || true
+  rm -f "$link"
+  rmdir "$target" 2>/dev/null || true
+  assert_status 1
+  assert_contains "under /tmp"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_a_normal_project_path_is_allowed() {
+  write_profile
+  stub_namespace
+  local back="$PWD"
+  cd "$REPO_ROOT" || _fail "could not enter the repo root"
+  TEST_KEY=k run_calypso --profile default --yes
+  cd "$back" || true
+  assert_status 0
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+# /var/tmp is not a subpath of /tmp, and must not be treated as one — the
+# check is specifically about oniux's private /tmp, not anything named "tmp".
+test_a_neutral_external_path_outside_tmp_is_allowed() {
+  write_profile
+  stub_namespace
+  local dir back="$PWD"
+  dir="$(mktemp -d -p /var/tmp calypso-test-XXXXXX)"
+  cd "$dir" || _fail "could not enter the neutral test directory"
+  TEST_KEY=k run_calypso --profile default --yes
+  cd "$back" || true
+  rmdir "$dir" 2>/dev/null || true
+  assert_status 0
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN"
 }
 
 test_startup_check_reports_what_will_be_used() {
@@ -265,6 +442,74 @@ test_doctor_does_not_claim_readiness() {
   TEST_KEY=k run_calypso doctor
   assert_not_contains "everything is ready"
   assert_contains "not checked:"
+}
+
+# umask 077 is set once near the top of the script so everything it creates —
+# regardless of the invoking shell's own umask — is private. Run explicitly
+# under a permissive parent umask to prove that is not inherited.
+test_compartment_and_config_are_private_under_a_permissive_parent_umask() {
+  local old_umask; old_umask="$(umask)"
+  umask 022
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch
+  umask "$old_umask"
+  assert_status 0
+  assert_mode "$CALYPSO_HOME/compartments/testbox" 700
+  assert_mode "$CALYPSO_HOME/compartments/testbox/opencode.calypso.json" 600
+  assert_mode "$CALYPSO_HOME/compartments/testbox/data" 700
+  assert_mode "$CALYPSO_HOME/compartments/testbox/state" 700
+}
+
+# `--` is the mandatory boundary for agent arguments. Before this, an
+# unrecognized option silently forwarded to the agent — a typo'd
+# `--proifle` quietly launched the *default* profile with the typo passed
+# along, rather than reporting the typo. Every security-relevant option name
+# is checked here: a typo in any of them must refuse, not launch.
+test_typo_in_profile_option_never_launches_default() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --proifle default --yes
+  assert_status 1
+  assert_contains "unknown option '--proifle'"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_typo_in_no_verify_option_never_launches() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes --no-verifyy
+  assert_status 1
+  assert_contains "unknown option '--no-verifyy'"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_typo_in_force_unsafe_option_never_launches() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yes --force-unsaf
+  assert_status 1
+  assert_contains "unknown option '--force-unsaf'"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+test_typo_in_yes_option_never_launches() {
+  write_profile
+  stub_calypsocode_agent
+  CALYPSO_NETWORK=none TEST_KEY=k run_calypso --profile default --yess
+  assert_status 1
+  assert_contains "unknown option '--yess'"
+  assert_not_contains "STUB_CALYPSOCODE_AGENT_RAN"
+}
+
+# A valid agent option after `--` must reach the agent completely unparsed by
+# the launcher, even though it looks like a launcher flag itself.
+test_agent_option_after_separator_reaches_the_agent_unparsed() {
+  write_profile
+  stub_calypsocode_agent
+  TEST_KEY=k launch -- --model some/model
+  assert_status 0
+  assert_contains "STUB_CALYPSOCODE_AGENT_RAN args=--model some/model"
 }
 
 run_tests

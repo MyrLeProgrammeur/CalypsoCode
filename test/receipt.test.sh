@@ -245,4 +245,25 @@ test_no_partial_receipt_is_left_behind() {
   assert_equals "$leftovers" "0"
 }
 
+# Same property as the compartment: state dir, session tally and the receipt
+# itself must be private regardless of the parent shell's umask.
+test_state_tally_and_receipt_are_private_under_a_permissive_parent_umask() {
+  write_profile
+  stub_calypsocode_agent
+  # Freshly created by the launcher itself under the test umask below: the
+  # sandbox's own state/ dir already exists from sandbox_setup, made under
+  # whatever umask the test harness happened to run with.
+  rmdir "$CALYPSO_STATE_DIR" 2>/dev/null || true
+  local old_umask; old_umask="$(umask)"
+  umask 022
+  TEST_KEY=k launch
+  umask "$old_umask"
+  assert_status 0
+  assert_mode "$CALYPSO_STATE_DIR" 700
+  assert_mode "$CALYPSO_STATE_DIR/sessions-testbox" 600
+  local receipt
+  receipt="$(find "$CALYPSO_STATE_DIR" -maxdepth 1 -name 'receipt-*.txt' | head -1)"
+  assert_mode "$receipt" 600
+}
+
 run_tests
