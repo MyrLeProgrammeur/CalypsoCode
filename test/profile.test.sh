@@ -163,6 +163,8 @@ test_key_presence_is_reported_without_printing_it() {
 # API_KEY_ENV is used in bash indirect expansion, so an array-like value is not
 # merely a bad name — it can execute during the expansion itself.
 test_array_like_api_key_env_is_refused_without_side_effect() {
+  # shellcheck disable=SC2016 # the $(...) must reach the profile unexpanded —
+  # expanding it here would run the payload in the test instead of the launcher.
   write_profile default \
     'NETWORK=tor' 'API_KEY_ENV=a[$(touch '"$SANDBOX"'/pwned)]' \
     'API_BASE=https://x.invalid' 'MODEL=m' 'GIT_NAME=n' 'GIT_EMAIL=e@f'

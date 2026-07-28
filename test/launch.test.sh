@@ -147,9 +147,11 @@ test_agent_arguments_are_passed_through() {
 test_an_empty_argument_survives_as_its_own_element() {
   write_profile
   stub_calypsocode_agent
-  TEST_KEY=k launch -- run "" done
+  # "done" is quoted only so it reads as a literal argument rather than a
+  # loop keyword; the value reaching the agent is the same either way.
+  TEST_KEY=k launch -- run "" "done"
   assert_status 0
-  assert_agent_argv run "" done
+  assert_agent_argv run "" "done"
 }
 
 test_an_argument_containing_only_whitespace_is_not_split() {
@@ -185,8 +187,11 @@ test_a_unicode_argument_survives_intact() {
 test_glob_and_quote_characters_are_not_interpreted() {
   write_profile
   stub_calypsocode_agent
+  # shellcheck disable=SC2016 # the point of the test is that $HOME and `cmd`
+  # stay unexpanded, so they must be written literally here.
   TEST_KEY=k launch -- '*.txt' 'a "quoted" word' "it's" '$HOME' '`cmd`'
   assert_status 0
+  # shellcheck disable=SC2016 # same literal expectation on the assert side.
   assert_agent_argv '*.txt' 'a "quoted" word' "it's" '$HOME' '`cmd`'
 }
 

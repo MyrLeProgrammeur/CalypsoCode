@@ -133,16 +133,19 @@ read_agent_argv() {
 # Compares the stub agent's recorded argv, element for element, against the
 # arguments given here.
 assert_agent_argv() {
-  local -a want=("$@") got=()
-  read_agent_argv got
-  if [ "${#got[@]}" != "${#want[@]}" ]; then
-    _fail "expected ${#want[@]} argv element(s), got ${#got[@]}" "$(printf '%q\n' "${got[@]}")"
+  # Named apart from the scalar `want`/`got` in assert_status and assert_mode.
+  # A name carries one type per file for the linter, so reusing them here would
+  # make those scalar reads look like an array expanded without an index.
+  local -a want_argv=("$@") got_argv=()
+  read_agent_argv got_argv
+  if [ "${#got_argv[@]}" != "${#want_argv[@]}" ]; then
+    _fail "expected ${#want_argv[@]} argv element(s), got ${#got_argv[@]}" "$(printf '%q\n' "${got_argv[@]}")"
     return
   fi
   local i
-  for i in "${!want[@]}"; do
-    if [ "${got[$i]}" != "${want[$i]}" ]; then
-      _fail "argv[$i]: expected $(printf '%q' "${want[$i]}"), got $(printf '%q' "${got[$i]:-}")"
+  for i in "${!want_argv[@]}"; do
+    if [ "${got_argv[$i]}" != "${want_argv[$i]}" ]; then
+      _fail "argv[$i]: expected $(printf '%q' "${want_argv[$i]}"), got $(printf '%q' "${got_argv[$i]:-}")"
       return
     fi
   done
